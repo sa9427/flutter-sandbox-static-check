@@ -452,7 +452,7 @@ def parse_show_hide(rest):
     return show_syms, hide_syms
 
 
-def check_unused_imports(files, lib_dir, symbols, findings, pkg=None):
+def check_unused_imports(files, lib_dir, symbols, findings, pkg=None, ext_members=None):
     self_prefix = ('package:%s/' % pkg) if pkg else 'package:fitcoach/'
     for fp in files:
         text = read(fp)
@@ -497,10 +497,17 @@ def check_unused_imports(files, lib_dir, symbols, findings, pkg=None):
             # 4) 工程内（package:<self>）—— 相对导入已由 C3 处理，这里只判未使用
             if spec.startswith(self_prefix):
                 rel = os.path.normpath(spec[len(self_prefix):]).replace('\\', '/')
+                body = re.sub(r"^\s*import\s+'[^']+'[^;]*;\s*$", '', text, flags=re.M)
+                # extension 成员以「接收者.成员」调用（如 IntensityColorX 的 .color），
+                # 符号名本身不会出现在文本里，须单独按 .成员 判定，否则会误报。
+                if ext_members and rel in ext_members and any(
+                        re.search(r'\.%s\b' % re.escape(mem), body) and
+                        (not on_type or re.search(r'\b%s\b' % re.escape(on_type), body))
+                        for (mem, on_type) in ext_members[rel]):
+                    continue
                 # symbols 的键是相对 lib 的路径，必须同口径查；此前用绝对路径
                 # 查询导致本分支永远拿不到符号 → 工程内未用 import 从未被抓到。
                 imported = symbols.get(rel)
-                body = re.sub(r"^\s*import\s+'[^']+'[^;]*;\s*$", '', text, flags=re.M)
                 if imported and not any(re.search(r'\b%s\b' % re.escape(s), body) for s in imported):
                     findings.append(('HINT', 'C7', fp, lineno,
                                      bi('import 可能未使用：%s' % spec,
@@ -555,45 +562,74 @@ def check_string_enum(files, findings):
 
 # ── 文件顶层符号收集（供 C7 工程内 import 判定）──────────────────────
 def collect_file_symbols(lib_dir):
-    """file_path(rel) -> 顶层标识符集合。"""
+    """返回 (file_path(rel) -> 顶层标识符集合, 各文件的 extension 成员名集合)。
+
+    extension 成员（如 IntensityColorX 的 `.color`）是以「接收者.成员」调用的，
+    成员名不会以独立标识符形式出现在调用方文本里，必须与顶层符号分开判定。
+    """
     sym = {}
+    ext_members = {}
     for root, _, files in os.walk(lib_dir):
         for f in files:
             fp = os.path.join(root, f)
             if not f.endswith('.dart') or EXCLUDE_RE.search(fp):
                 continue
             names = set()
+            members = []          # [(成员名, extension 的 on 类型)]
+            cur_on_type = None
+            in_ext = False
             for raw in read(fp).split('\n'):
                 line = raw.rstrip()
+                if not line:
+                    continue
                 # 只取顶层声明（无缩进）：与 analyzer 的「库公开命名空间」口径一致，
                 # 类成员不参与未用 import 判定（否则 build/dispose 之类会到处命中）。
-                if not line or line[0].isspace():
-                    continue
-                m = re.match(
-                    r'(?:abstract\s+|base\s+|final\s+|sealed\s+|interface\s+|mixin\s+)*'
-                    r'(?:class|enum|mixin|typedef|extension)\s+([A-Za-z_]\w*)', line)
-                if m:
-                    names.add(m.group(1))
-                    continue
-                # 顶层函数（返回类型可含泛型）
-                m = re.match(
-                    r'(?:external\s+)?[A-Za-z_][\w<>,\s\[\]?]*?\s+([a-z_]\w*)\s*\(', line)
-                if m:
-                    names.add(m.group(1))
-                    continue
-                # 顶层变量 / 常量（类型可含泛型，需先剥离 <...> 才能取到名字）
-                m = re.match(
-                    r'(?:late\s+|final\s+|const\s+|var\s+)([\w<>,\s\[\]?]*?)\s*'
-                    r'([A-Za-z_]\w*)\s*=', line)
-                if m:
-                    names.add(m.group(2))
-                    continue
+                if not line[0].isspace():
+                    in_ext = False
+                    m = re.match(
+                        r'(?:abstract\s+|base\s+|final\s+|sealed\s+|interface\s+|mixin\s+)*'
+                        r'(?:class|enum|mixin|typedef|extension)\s+([A-Za-z_]\w*)', line)
+                    if m:
+                        names.add(m.group(1))
+                        if re.match(
+                                r'(?:abstract\s+|base\s+|final\s+|sealed\s+|interface\s+|mixin\s+)*'
+                                r'extension\s+', line):
+                            in_ext = True
+                            om = re.search(r'\bon\s+([A-Za-z_][\w<>,\s\[\]?]*)', line)
+                            cur_on_type = om.group(1).strip() if om else None
+                        continue
+                    # 顶层函数（返回类型可含泛型）
+                    m = re.match(
+                        r'(?:external\s+)?[A-Za-z_][\w<>,\s\[\]?]*?\s+([a-z_]\w*)\s*\(', line)
+                    if m:
+                        names.add(m.group(1))
+                        continue
+                    # 顶层变量 / 常量（类型可含泛型，需先剥离 <...> 才能取到名字）
+                    m = re.match(
+                        r'(?:late\s+|final\s+|const\s+|var\s+)([\w<>,\s\[\]?]*?)\s*'
+                        r'([A-Za-z_]\w*)\s*=', line)
+                    if m:
+                        names.add(m.group(2))
+                        continue
+                elif in_ext:
+                    # extension 体：抽 getter / 方法名
+                    m = re.search(r'\bget\s+(\w+)', line)
+                    if m:
+                        members.append((m.group(1), cur_on_type))
+                        continue
+                    m = re.match(r'\s+[A-Za-z_][\w<>,\s\[\]?]*?\s+(\w+)\s*\(', line)
+                    if m:
+                        members.append((m.group(1), cur_on_type))
             # 单字母标识符不做「已引用」的证据（sort((a, b) => ...) 的 b 会误命中），
             # 私有名（_ 开头）不在库公开命名空间内，同样不能作为证据。
             names = {n for n in names if len(n) >= 2 and not n.startswith('_')}
+            members = [(m, t) for (m, t) in members
+                       if len(m) >= 2 and not m.startswith('_')]
             rel = os.path.relpath(fp, lib_dir).replace('\\', '/')
             sym[rel] = names
-    return sym
+            if members:
+                ext_members[rel] = members
+    return sym, ext_members
 
 
 # ── 检查 10：声明但从未 import 的依赖（HINT，借鉴 flutter_analyzer_script）
@@ -649,7 +685,7 @@ def main():
     assets = parse_pubspec_assets(project)
     enums = collect_enums(lib_dir)
     named_params = collect_named_params(lib_dir)
-    symbols = collect_file_symbols(lib_dir)
+    symbols, ext_members = collect_file_symbols(lib_dir)
     pkg = read_pubspec_name(project)
 
     check_imports(files, lib_dir, project, findings, pkg)
@@ -657,7 +693,7 @@ def main():
     check_enum_usage(files, enums, findings)
     check_assets(files, assets, findings)
     check_named_params(files, named_params, findings)
-    check_unused_imports(files, lib_dir, symbols, findings, pkg)
+    check_unused_imports(files, lib_dir, symbols, findings, pkg, ext_members)
     check_brackets(files, findings)
     check_string_enum(files, findings)
     check_unused_deps(files, runtime_deps, findings)
