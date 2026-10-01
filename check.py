@@ -38,6 +38,8 @@ COMMON_PARAMS = {
     'crossAxisCount', 'applicationName', 'applicationVersion', 'semanticsLabel', 'filter',
     'restorationId', 'useMaterial3', 'scaffoldMessengerKey', 'navigatorKey', 'themeMode',
     'debugShowCheckedModeBanner', 'locale', 'supportedLocales', 'localizationsDelegates',
+    # Duration / DateTime 等 dart:core 参数（签名在 SDK 内，扫描不到）
+    'seconds', 'milliseconds', 'microseconds', 'minutes', 'hours', 'days',
     # 本工程自定义参数
     'workMet', 'totalSets', 'avgMet', 'withReps', 'restSeconds',
 }
@@ -163,7 +165,8 @@ def strip_strings_comments(text):
 
 
 # ── 检查 1/3：import 解析 + 相对导入 ─────────────────────────────────────
-def check_imports(files, lib_dir, project_root, findings):
+def check_imports(files, lib_dir, project_root, findings, pkg=None):
+    self_prefix = ('package:%s/' % pkg) if pkg else 'package:fitcoach/'
     for fp in files:
         text = read(fp)
         rel = os.path.relpath(fp, lib_dir).replace('\\', '/')
@@ -178,8 +181,8 @@ def check_imports(files, lib_dir, project_root, findings):
                                  bi('相对导入残留：%s（建议改用 package: 绝对导入）' % spec,
                                     'Relative import leftover: %s — prefer package: absolute import' % spec)))
                 continue
-            if spec.startswith('package:fitcoach/'):
-                target = os.path.join(lib_dir, spec[len('package:fitcoach/'):])
+            if spec.startswith(self_prefix):
+                target = os.path.join(lib_dir, spec[len(self_prefix):])
                 if not os.path.exists(target):
                     findings.append(('ERROR', 'C1', fp, lineno,
                                      bi('断 import：%s 不存在' % spec,
@@ -190,6 +193,17 @@ def check_imports(files, lib_dir, project_root, findings):
 
 
 # ── 检查 2：pubspec 依赖一致性 ──────────────────────────────────────────
+def read_pubspec_name(project_root):
+    """取 pubspec 的 name，用于判定「本工程自身的 package: 导入」。
+
+    原先硬编码 fitcoach，导致本工具对任何其它工程都静默失效（C1/C7 的
+    工程内 import 分支永不命中）。公开后必须泛化。
+    """
+    text = read(os.path.join(project_root, 'pubspec.yaml'))
+    m = re.search(r"^name\s*:\s*([\w_-]+)\s*$", text, re.M)
+    return m.group(1) if m else None
+
+
 def parse_pubspec_deps(project_root):
     p = os.path.join(project_root, 'pubspec.yaml')
     text = read(p)
@@ -243,21 +257,21 @@ def parse_pubspec_runtime_deps(project_root):
     return deps
 
 
-def check_pubspec_deps(files, deps, findings):
+def check_pubspec_deps(files, deps, findings, pkg=None):
     for fp in files:
         text = read(fp)
         for m in re.finditer(r"^\s*import\s+'([^']+)'", text, re.M):
             spec = m.group(1)
             if not spec.startswith('package:'):
                 continue
-            pkg = spec[len('package:'):].split('/')[0]
-            if pkg == 'fitcoach':
+            p = spec[len('package:'):].split('/')[0]
+            if p == pkg:  # 本工程自身（原先硬编码 fitcoach，对其它工程会误报）
                 continue
-            if pkg not in deps:
+            if p not in deps:
                 lineno = text.count('\n', 0, m.start()) + 1
                 findings.append(('ERROR', 'C2', fp, lineno,
-                                 bi('import 的 package:%s 未在 pubspec 声明' % pkg,
-                                    'imported package:%s not declared in pubspec.yaml' % pkg)))
+                                 bi('import 的 package:%s 未在 pubspec 声明' % p,
+                                    'imported package:%s not declared in pubspec.yaml' % p)))
 
 
 # ── 检查 4：枚举值存在性 ────────────────────────────────────────────────
@@ -374,8 +388,27 @@ def collect_named_params(lib_dir):
             if not f.endswith('.dart') or EXCLUDE_RE.search(fp):
                 continue
             text = read(fp)
-            for m in re.finditer(r'\{([^}]*)\}', text):
+            # 只取一层花括号（[^{}] 避免跨嵌套误配）
+            for m in re.finditer(r'\{([^{}]*)\}', text):
                 body = m.group(1)
+                for part in body.split(','):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    # 形式一：name: 默认值（含 required Type name: x）
+                    pm = re.search(r'\b([A-Za-z_]\w*)\s*:', part)
+                    if pm:
+                        params.add(pm.group(1))
+                        continue
+                    # 形式二：Type? name / required Type name / this.name
+                    # —— 无默认值的命名参数此前因要求冒号而被漏收，导致
+                    #    _copy(s, weight: v) 之类被误报成拼写错误。
+                    #    注意先截掉 `= 默认值`（{this.isBodyweight = false} 用的是
+                    #    等号而非冒号，不截会把默认值名 false 当成参数名）。
+                    pm = re.search(r'\b([A-Za-z_]\w*)\s*$', part.split('=')[0].strip())
+                    if pm:
+                        params.add(pm.group(1))
+                # 兼容旧逻辑：整段内 name: 的取值（含逗号被泛型吞掉的情况）
                 for pm in re.finditer(r'(?:required\s+)?[\w<>?,\s]*?\b([A-Za-z_]\w*)\s*:', body):
                     params.add(pm.group(1))
     return params
@@ -388,6 +421,10 @@ def check_named_params(files, all_params, findings):
             args = m.group(2)
             for am in re.finditer(r'([A-Za-z_]\w*)\s*:', args):
                 name = am.group(1)
+                # 跳过 `Icons.stop : Icons.play_arrow` 这类「静态/枚举成员后紧跟
+                # 三元运算符冒号」——它不是命名参数（此前是全工程最大误报源）。
+                if am.start() > 0 and args[am.start() - 1] == '.':
+                    continue
                 if name in COMMON_PARAMS or name in all_params:
                     continue
                 lineno = text.count('\n', 0, m.start()) + 1
@@ -413,7 +450,8 @@ def parse_show_hide(rest):
     return show_syms, hide_syms
 
 
-def check_unused_imports(files, lib_dir, symbols, findings):
+def check_unused_imports(files, lib_dir, symbols, findings, pkg=None):
+    self_prefix = ('package:%s/' % pkg) if pkg else 'package:fitcoach/'
     for fp in files:
         text = read(fp)
         filedir = os.path.dirname(fp)
@@ -454,12 +492,14 @@ def check_unused_imports(files, lib_dir, symbols, findings):
                                          bi('import 未使用：%s（其公开符号均未出现）' % spec,
                                             'unused import: %s (none of its public symbols appear)' % spec)))
                 continue
-            # 4) 工程内（package:fitcoach）—— 相对导入已由 C3 处理，这里只判未使用
-            if spec.startswith('package:fitcoach/'):
-                rel = spec[len('package:fitcoach/'):]
-                target = os.path.normpath(os.path.join(lib_dir, rel)).replace('\\', '/')
-                imported = symbols.get(target)
-                if imported and not any(re.search(r'\b%s\b' % re.escape(s), text) for s in imported):
+            # 4) 工程内（package:<self>）—— 相对导入已由 C3 处理，这里只判未使用
+            if spec.startswith(self_prefix):
+                rel = os.path.normpath(spec[len(self_prefix):]).replace('\\', '/')
+                # symbols 的键是相对 lib 的路径，必须同口径查；此前用绝对路径
+                # 查询导致本分支永远拿不到符号 → 工程内未用 import 从未被抓到。
+                imported = symbols.get(rel)
+                body = re.sub(r"^\s*import\s+'[^']+'[^;]*;\s*$", '', text, flags=re.M)
+                if imported and not any(re.search(r'\b%s\b' % re.escape(s), body) for s in imported):
                     findings.append(('HINT', 'C7', fp, lineno,
                                      bi('import 可能未使用：%s' % spec,
                                         'import possibly unused: %s' % spec)))
@@ -520,12 +560,35 @@ def collect_file_symbols(lib_dir):
             fp = os.path.join(root, f)
             if not f.endswith('.dart') or EXCLUDE_RE.search(fp):
                 continue
-            text = read(fp)
             names = set()
-            for mm in re.finditer(r'\b(?:class|enum|mixin|typedef)\s+(\w+)', text):
-                names.add(mm.group(1))
-            for mm in re.finditer(r'\b(?:const|final|var)\s+(?:[A-Za-z_]\w*\s+)*?(\w+)\s*=', text):
-                names.add(mm.group(1))
+            for raw in read(fp).split('\n'):
+                line = raw.rstrip()
+                # 只取顶层声明（无缩进）：与 analyzer 的「库公开命名空间」口径一致，
+                # 类成员不参与未用 import 判定（否则 build/dispose 之类会到处命中）。
+                if not line or line[0].isspace():
+                    continue
+                m = re.match(
+                    r'(?:abstract\s+|base\s+|final\s+|sealed\s+|interface\s+|mixin\s+)*'
+                    r'(?:class|enum|mixin|typedef|extension)\s+([A-Za-z_]\w*)', line)
+                if m:
+                    names.add(m.group(1))
+                    continue
+                # 顶层函数（返回类型可含泛型）
+                m = re.match(
+                    r'(?:external\s+)?[A-Za-z_][\w<>,\s\[\]?]*?\s+([a-z_]\w*)\s*\(', line)
+                if m:
+                    names.add(m.group(1))
+                    continue
+                # 顶层变量 / 常量（类型可含泛型，需先剥离 <...> 才能取到名字）
+                m = re.match(
+                    r'(?:late\s+|final\s+|const\s+|var\s+)([\w<>,\s\[\]?]*?)\s*'
+                    r'([A-Za-z_]\w*)\s*=', line)
+                if m:
+                    names.add(m.group(2))
+                    continue
+            # 单字母标识符不做「已引用」的证据（sort((a, b) => ...) 的 b 会误命中），
+            # 私有名（_ 开头）不在库公开命名空间内，同样不能作为证据。
+            names = {n for n in names if len(n) >= 2 and not n.startswith('_')}
             rel = os.path.relpath(fp, lib_dir).replace('\\', '/')
             sym[rel] = names
     return sym
@@ -578,13 +641,14 @@ def main():
     enums = collect_enums(lib_dir)
     named_params = collect_named_params(lib_dir)
     symbols = collect_file_symbols(lib_dir)
+    pkg = read_pubspec_name(project)
 
-    check_imports(files, lib_dir, project, findings)
-    check_pubspec_deps(files, deps, findings)
+    check_imports(files, lib_dir, project, findings, pkg)
+    check_pubspec_deps(files, deps, findings, pkg)
     check_enum_usage(files, enums, findings)
     check_assets(files, assets, findings)
     check_named_params(files, named_params, findings)
-    check_unused_imports(files, lib_dir, symbols, findings)
+    check_unused_imports(files, lib_dir, symbols, findings, pkg)
     check_brackets(files, findings)
     check_string_enum(files, findings)
     check_unused_deps(files, runtime_deps, findings)
