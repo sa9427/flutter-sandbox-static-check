@@ -17,6 +17,12 @@ import os
 import re
 import sys
 
+
+def bi(zh, en):
+    """返回中英双语字符串：中文为主、英文补充。
+    Return a bilingual string: Chinese primary, English supplementary."""
+    return '%s  /  %s' % (zh, en)
+
 # ── 常见 Flutter/Dart 命名参数白名单（降低 C6 HINT 误报）───────────────
 COMMON_PARAMS = {
     'key', 'child', 'children', 'builder', 'onPressed', 'onTap', 'onChanged', 'value',
@@ -169,13 +175,15 @@ def check_imports(files, lib_dir, project_root, findings):
                 continue
             if spec.startswith('./') or spec.startswith('../'):
                 findings.append(('ERROR', 'C3', fp, lineno,
-                                 '相对导入残留：%s（建议改用 package: 绝对导入）' % spec))
+                                 bi('相对导入残留：%s（建议改用 package: 绝对导入）' % spec,
+                                    'Relative import leftover: %s — prefer package: absolute import' % spec)))
                 continue
             if spec.startswith('package:fitcoach/'):
                 target = os.path.join(lib_dir, spec[len('package:fitcoach/'):])
                 if not os.path.exists(target):
                     findings.append(('ERROR', 'C1', fp, lineno,
-                                     '断 import：%s 不存在' % spec))
+                                     bi('断 import：%s 不存在' % spec,
+                                        'Broken import: %s does not exist' % spec)))
                 continue
             # 其它 package:X/... —— 交给 C2 依赖一致性检查
     return
@@ -248,7 +256,8 @@ def check_pubspec_deps(files, deps, findings):
             if pkg not in deps:
                 lineno = text.count('\n', 0, m.start()) + 1
                 findings.append(('ERROR', 'C2', fp, lineno,
-                                 'import 的 package:%s 未在 pubspec 声明' % pkg))
+                                 bi('import 的 package:%s 未在 pubspec 声明' % pkg,
+                                    'imported package:%s not declared in pubspec.yaml' % pkg)))
 
 
 # ── 检查 4：枚举值存在性 ────────────────────────────────────────────────
@@ -300,14 +309,16 @@ def check_enum_usage(files, enums, findings):
             if enum_name in enums and val not in enums[enum_name]:
                 lineno = text.count('\n', 0, m.start()) + 1
                 findings.append(('ERROR', 'C4', fp, lineno,
-                                 '%s.values.byName(\'%s\') 的值不存在' % (enum_name, val)))
+                                 bi('%s.values.byName(\'%s\') 的值不存在' % (enum_name, val),
+                                    '%s.values.byName(\'%s\') value does not exist' % (enum_name, val))))
         # 直接点访问：Enum.x 非已知值/安全成员 → HINT
         for m in re.finditer(r'\b([A-Z]\w*)\.([A-Za-z_]\w*)\b', text):
             enum_name, member = m.group(1), m.group(2)
             if enum_name in enums and member not in enums[enum_name] and member not in ENUM_SAFE:
                 lineno = text.count('\n', 0, m.start()) + 1
                 findings.append(('HINT', 'C4', fp, lineno,
-                                 '%s.%s 可能不是 %s 的枚举值/成员' % (enum_name, member, enum_name)))
+                                 bi('%s.%s 可能不是 %s 的枚举值/成员' % (enum_name, member, enum_name),
+                                    '%s.%s may not be an enum value/member of %s' % (enum_name, member, enum_name))))
 
 
 # ── 检查 5：assets 引用缺失 ─────────────────────────────────────────────
@@ -350,7 +361,8 @@ def check_assets(files, assets, findings):
             if not ok:
                 lineno = text.count('\n', 0, m.start()) + 1
                 findings.append(('HINT', 'C5', fp, lineno,
-                                 'assets 引用可能缺失：%s（pubspec 未声明）' % ref))
+                                 bi('assets 引用可能缺失：%s（pubspec 未声明）' % ref,
+                                    'asset reference possibly missing: %s (not declared in pubspec)' % ref)))
 
 
 # ── 检查 6：命名参数拼写（仅小写业务函数，HINT）────────────────────────
@@ -380,7 +392,8 @@ def check_named_params(files, all_params, findings):
                     continue
                 lineno = text.count('\n', 0, m.start()) + 1
                 findings.append(('HINT', 'C6', fp, lineno,
-                                 '命名参数可能拼写错误：%s:（未在工程任何签名中声明）' % name))
+                                 bi('命名参数可能拼写错误：%s:（未在工程任何签名中声明）' % name,
+                                    'named argument possibly misspelled: %s: (not declared in any signature)' % name)))
 
 
 # ── 检查 7：未使用 import（HINT）──────────────────────────────────────
@@ -415,15 +428,19 @@ def check_unused_imports(files, lib_dir, symbols, findings):
             if as_prefix:
                 if not re.search(r'\b%s\.' % re.escape(as_prefix), text):
                     findings.append(('HINT', 'C7', fp, lineno,
-                                     'import 未使用：%s（as %s 从未以 %s. 引用）'
-                                     % (spec, as_prefix, as_prefix)))
+                                     bi('import 未使用：%s（as %s 从未以 %s. 引用）'
+                                        % (spec, as_prefix, as_prefix),
+                                        'unused import: %s (as %s never referenced as %s.)'
+                                        % (spec, as_prefix, as_prefix))))
                 continue
             # 2) show 精确符号
             if show_syms:
                 if not any(re.search(r'\b%s\b' % re.escape(s), text) for s in show_syms):
                     findings.append(('HINT', 'C7', fp, lineno,
-                                     'import 未使用：%s（show 的符号 %s 均未出现）'
-                                     % (spec, ','.join(show_syms))))
+                                     bi('import 未使用：%s（show 的符号 %s 均未出现）'
+                                        % (spec, ','.join(show_syms)),
+                                        'unused import: %s (none of shown symbols %s appear)'
+                                        % (spec, ','.join(show_syms)))))
                 continue
             # 3) dart: 内建库：以公开符号是否出现判定
             if spec.startswith('dart:'):
@@ -434,7 +451,8 @@ def check_unused_imports(files, lib_dir, symbols, findings):
                         cands -= set(hide_syms)
                     if cands and not any(re.search(r'\b%s\b' % re.escape(s), text) for s in cands):
                         findings.append(('HINT', 'C7', fp, lineno,
-                                         'import 未使用：%s（其公开符号均未出现）' % spec))
+                                         bi('import 未使用：%s（其公开符号均未出现）' % spec,
+                                            'unused import: %s (none of its public symbols appear)' % spec)))
                 continue
             # 4) 工程内（package:fitcoach）—— 相对导入已由 C3 处理，这里只判未使用
             if spec.startswith('package:fitcoach/'):
@@ -443,7 +461,8 @@ def check_unused_imports(files, lib_dir, symbols, findings):
                 imported = symbols.get(target)
                 if imported and not any(re.search(r'\b%s\b' % re.escape(s), text) for s in imported):
                     findings.append(('HINT', 'C7', fp, lineno,
-                                     'import 可能未使用：%s' % spec))
+                                     bi('import 可能未使用：%s' % spec,
+                                        'import possibly unused: %s' % spec)))
                 continue
             # 5) 外部 package（无 as/show）—— 未知导出符号，跳过以免误报
             continue
@@ -462,11 +481,13 @@ def check_brackets(files, findings):
                 stack.append(c)
             elif c in (')', '}', ']'):
                 if not stack or stack[-1] != pairs[c]:
-                    findings.append(('HINT', 'C8', fp, -1, '括号可能不配对：%s' % c))
+                    findings.append(('HINT', 'C8', fp, -1, bi('括号可能不配对：%s' % c,
+                                                             'brackets possibly unbalanced: %s' % c)))
                     break
                 stack.pop()
         if stack:
-            findings.append(('HINT', 'C8', fp, -1, '括号未闭合：%s 残留' % stack[-1]))
+            findings.append(('HINT', 'C8', fp, -1, bi('括号未闭合：%s 残留' % stack[-1],
+                                                     'unclosed bracket: %s remains' % stack[-1])))
 
 
 # ── 检查 9：字符串型枚举残留（HINT）──────────────────────────────────
@@ -486,7 +507,8 @@ def check_string_enum(files, findings):
                         or re.search(r'\.\s*$', ctx):
                     lineno = text.count('\n', 0, m.start()) + 1
                     findings.append(('HINT', 'C9', fp, lineno,
-                                     '疑似字符串型枚举残留：\'%s\'' % tok))
+                                     bi('疑似字符串型枚举残留：\'%s\'' % tok,
+                                        'suspected string-enum residue: \'%s\'' % tok)))
 
 
 # ── 文件顶层符号收集（供 C7 工程内 import 判定）──────────────────────
@@ -523,7 +545,8 @@ def check_unused_deps(files, runtime_deps, findings):
             continue
         if dep not in used:
             findings.append(('HINT', 'C10', os.path.join(project_root_ref, 'pubspec.yaml'),
-                             0, '依赖 %s 已声明但无任何文件 import（可能未使用）' % dep))
+                             0, bi('依赖 %s 已声明但无任何文件 import（可能未使用）' % dep,
+                                   'dependency %s declared but never imported (possibly unused)' % dep)))
 
 
 # project_root_ref 供 C10 输出路径使用（main 中赋值）
@@ -541,11 +564,12 @@ def main():
     lib_dir = os.path.join(project, 'lib') if os.path.isdir(os.path.join(project, 'lib')) \
         else project
     if not os.path.isdir(lib_dir):
-        print('找不到 lib 目录：%s' % lib_dir)
+        print(bi('找不到 lib 目录：%s' % lib_dir, 'lib directory not found: %s' % lib_dir))
         sys.exit(2)
 
     files = find_dart_files(lib_dir)
-    print('扫描 %d 个 dart 文件（%s）' % (len(files), lib_dir))
+    print(bi('扫描 %d 个 dart 文件（%s）' % (len(files), lib_dir),
+             'Scanned %d dart files (%s)' % (len(files), lib_dir)))
 
     findings = []
     deps = parse_pubspec_deps(project)
@@ -575,19 +599,25 @@ def main():
             print('  [%s] %s  %s' % (cid, where, msg))
 
     if errors:
-        print('\n❌ ERROR（编译期硬错，必须先修）：')
+        print('\n' + bi('❌ ERROR（编译期硬错，必须先修）：',
+                       'ERROR (compile-time hard errors, must fix first):'))
         show(errors)
     if hints:
-        print('\n⚠️ HINT（启发式，请人工确认）：')
+        print('\n' + bi('⚠️ HINT（启发式，请人工确认）：',
+                       'HINT (heuristic, please confirm manually):'))
         show(hints)
-    print('\n枚举定义：%d 个；命名参数池：%d 个；assets：%d 个；运行时依赖：%d 个'
-          % (len(enums), len(named_params), len(assets), len(runtime_deps)))
+    print('\n' + bi('枚举定义：%d 个；命名参数池：%d 个；assets：%d 个；运行时依赖：%d 个'
+                    % (len(enums), len(named_params), len(assets), len(runtime_deps)),
+                    'Enums: %d; named-param pool: %d; assets: %d; runtime deps: %d'
+                    % (len(enums), len(named_params), len(assets), len(runtime_deps))))
     if not errors and not hints:
-        print('\nRESULT: 工程干净 ✅')
+        print('\nRESULT: 工程干净 ✅  /  RESULT: project is clean ✅')
     elif not errors:
-        print('\nRESULT: 无硬错，但有 %d 处 HINT ⚠️' % len(hints))
+        print('\n' + bi('RESULT: 无硬错，但有 %d 处 HINT ⚠️' % len(hints),
+                       'RESULT: no hard errors, but %d HINT(s) ⚠️' % len(hints)))
     else:
-        print('\nRESULT: 发现 %d 处问题 ⚠️' % len(findings))
+        print('\n' + bi('RESULT: 发现 %d 处问题 ⚠️' % len(findings),
+                       'RESULT: found %d issue(s) ⚠️' % len(findings)))
 
 
 if __name__ == '__main__':
