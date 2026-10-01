@@ -57,7 +57,8 @@ DART_LIB_SYMBOLS = {
                    'Int32List', 'Uint64List', 'Int64List', 'Float32List', 'Float64List',
                    'Float32x4', 'Float64x2', 'Int32x4', 'ByteData', 'ByteBuffer', 'Endian',
                    'Endianness', 'TransferableTypedData'},
-    'convert': {'json', 'jsonEncode', 'jsonDecode', 'utf8', 'base64', 'base64Url', 'ascii',
+    'convert': {'json', 'jsonEncode', 'jsonDecode', 'JsonEncoder', 'JsonDecoder', 'JsonCodec',
+                'utf8', 'base64', 'base64Url', 'ascii',
                 'latin1', 'SystemEncoding', 'Encoding', 'Codec', 'Converter', 'Decoder',
                 'Encoder', 'ClosableStringSink', 'StringConversionSink'},
     'math': {'min', 'max', 'pow', 'sqrt', 'sin', 'cos', 'tan', 'atan', 'atan2', 'exp', 'log',
@@ -159,6 +160,69 @@ def strip_strings_comments(text):
                 if text[i] == quote:
                     i += 1
                     break
+                i += 1
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def mask_strings_comments(text):
+    """把字符串字面量与注释替换成**等长**空格（保留换行与字符偏移）。
+
+    与 strip_strings_comments 的区别：后者会删除字符，在其上做正则匹配后
+    无法回原文定位行号；本函数保证 `len(mask(t)) == len(t)` 且每个换行仍在
+    原位，因此匹配结果的 offset 可直接用于原文。用于 C6 命名参数检查。
+    """
+    out = []
+    i, n = 0, len(text)
+
+    def blank(ch):
+        return '\n' if ch == '\n' else ' '
+
+    while i < n:
+        c = text[i]
+        two = text[i:i + 2]
+        if two == '//':
+            while i < n and text[i] != '\n':
+                out.append(' ')
+                i += 1
+            continue
+        if two == '/*':
+            while i < n and text[i:i + 2] != '*/':
+                out.append(blank(text[i]))
+                i += 1
+            if i < n:
+                out.append('  ')
+                i += 2
+            continue
+        if c in ('"', "'"):
+            three = text[i:i + 3]
+            if three in ('"""', "'''"):
+                out.append('   ')
+                i += 3
+                while i < n and text[i:i + 3] != three:
+                    out.append(blank(text[i]))
+                    i += 1
+                if i < n:
+                    out.append('   ')
+                    i += 3
+                continue
+            out.append(' ')
+            i += 1
+            while i < n:
+                if text[i] == '\\':
+                    out.append(' ')
+                    i += 1
+                    if i < n:
+                        out.append(blank(text[i]))
+                        i += 1
+                    continue
+                if text[i] == c:
+                    out.append(' ')
+                    i += 1
+                    break
+                out.append(blank(text[i]))
                 i += 1
             continue
         out.append(c)
@@ -419,7 +483,12 @@ def collect_named_params(lib_dir):
 def check_named_params(files, all_params, findings):
     for fp in files:
         text = read(fp)
-        for m in re.finditer(r'\b([a-z]\w*)\s*\(([^)]*)\)', text):
+        # 先剥掉字符串与注释再匹配：否则 `debugPrint('... FlutterError: ...')`
+        # 这类「字符串里带冒号的词」会被当成命名参数误报（2026-10-01 修）。
+        # 用等长掩码（mask_strings_comments）而非 strip_strings_comments，
+        # 保证 offset 与原文对齐，行号才不会错位。
+        code = mask_strings_comments(text)
+        for m in re.finditer(r'\b([a-z]\w*)\s*\(([^)]*)\)', code):
             args = m.group(2)
             for am in re.finditer(r'([A-Za-z_]\w*)\s*:', args):
                 name = am.group(1)
@@ -685,6 +754,10 @@ def main():
     assets = parse_pubspec_assets(project)
     enums = collect_enums(lib_dir)
     named_params = collect_named_params(lib_dir)
+    # test/ 里也有本地函数签名（如测试里的 payload({List<X>? cardioList})），
+    # 只扫 lib/ 会把这些调用全报成"拼写错误"（2026-10-01 修）。
+    if args.with_test and os.path.isdir(os.path.join(project, 'test')):
+        named_params |= collect_named_params(os.path.join(project, 'test'))
     symbols, ext_members = collect_file_symbols(lib_dir)
     pkg = read_pubspec_name(project)
 
