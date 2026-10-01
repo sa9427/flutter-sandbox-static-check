@@ -40,6 +40,8 @@ COMMON_PARAMS = {
     'debugShowCheckedModeBanner', 'locale', 'supportedLocales', 'localizationsDelegates',
     # Duration / DateTime 等 dart:core 参数（签名在 SDK 内，扫描不到）
     'seconds', 'milliseconds', 'microseconds', 'minutes', 'hours', 'days',
+    # flutter_test 常用参数（测试代码的 expect(..., reason:) 等）
+    'reason', 'skip', 'matcher', 'variants', 'tags',
     # 本工程自定义参数
     'workMet', 'totalSets', 'avgMet', 'withReps', 'restSeconds',
 }
@@ -620,6 +622,9 @@ def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
     ap.add_argument('--project', default='C:/code/fitcoach')
+    ap.add_argument('--with-test', action='store_true',
+                    help='also scan <project>/test (test code needs checking too) / '
+                         '同时体检 test/ 目录')
     args = ap.parse_args()
 
     project = os.path.abspath(args.project)
@@ -631,6 +636,10 @@ def main():
         sys.exit(2)
 
     files = find_dart_files(lib_dir)
+    # 测试代码也是交付物：开启后一并体检（import 仍按 lib_dir 解析，符合
+    # package: 导入语义；此前只能扫 lib/，test/ 下的断 import 完全查不到）。
+    if args.with_test and os.path.isdir(os.path.join(project, 'test')):
+        files = files + find_dart_files(os.path.join(project, 'test'))
     print(bi('扫描 %d 个 dart 文件（%s）' % (len(files), lib_dir),
              'Scanned %d dart files (%s)' % (len(files), lib_dir)))
 
