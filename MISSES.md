@@ -114,6 +114,33 @@
   （与既有记忆规则「插入勿吞锚点行」是同一条，本次补上**删除/替换变体**。）
 - **状态**：⬜ 不补斧（能力边界，已记录实验证据与替代纪律）。
 
+### M-005 · 2026-10-03 · fitcoach E9-a(C29) · ConsumerState 与 widget 不配对 → **新增 C14**
+
+- **症状**：宿主 `flutter analyze` **唯一一条 error**
+  `lib/widgets/cardio_segment_form.dart:42:53 type_argument_not_matching_bounds`
+  （`_CardioSegmentFormState extends ConsumerState<CardioSegmentForm>`，
+  但 `CardioSegmentForm extends StatefulWidget`）；
+  `flutter test` 连带 `test/widget_test.dart` 整个 `Failed to load`（`-1`）。
+- **根因**：E9-a 为了在 State 里 `ref.watch(profileProvider)` 把 `State` 改成了
+  `ConsumerState`，**widget 侧忘了同步改成 `ConsumerStatefulWidget`**（createState 的
+  返回类型也要改成 `ConsumerState<X>`）。
+  正解：两侧**同时**改 —— `class X extends ConsumerStatefulWidget` +
+  `ConsumerState<X> createState() => _XState();`。
+- **危害被放大的原因**：一个 widget 编译失败 → 所有 import 它的测试文件一起
+  `Failed to load`，报错量看着吓人，**实际只有一个根因**（先找 analyze 的 error 条数）。
+- **旧九板斧为何漏**：只查 import / 枚举 / 括号 / 命名，**完全不查 State 与 widget 的
+  基类配对**。
+- **补的斧**：新增 **C14（ConsumerState ↔ ConsumerStatefulWidget 配对，ERROR）**，
+  **双向**都抓（ConsumerState 配 StatefulWidget、State 配 ConsumerStatefulWidget）。
+- **最小复现**：把 `cardio_segment_form.dart` 的
+  `class CardioSegmentForm extends ConsumerStatefulWidget` 改回 `StatefulWidget` →
+  应报 `C14 ... cardio_segment_form.dart:42 _CardioSegmentFormState extends ConsumerState<CardioSegmentForm> → CardioSegmentForm 必须 extends ConsumerStatefulWidget`。
+- **降噪**：**只在本文件内配对**（widget 与 State 通常同文件），跨文件 widget 直接跳过
+  不猜 → 干净工程零误报（fitcoach 81 文件复跑确认）。
+- **反向验证**：临时样例 `/tmp/c14check/lib/a.dart` 含 1 组正确 + 2 组错误配对 →
+  C14 **只报那 2 组**（Good 未误报）；fitcoach 修复后 C14 零告警。
+- **状态**：✅ 已补斧并反向验证通过（2026-10-03）。
+
 ---
 
 ## 新条目模板 / Template for New Entries

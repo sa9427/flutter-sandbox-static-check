@@ -1,17 +1,18 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v3 起 12 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4 起 13 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 12 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 13 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
-  字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**。
-  Flutter/Dart static checker that runs without the Dart SDK: 12 checks
+  字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
+  **ConsumerState 与 widget 配对**。
+  Flutter/Dart static checker that runs without the Dart SDK: 13 checks
   (test/ included by default) — broken imports, dependency consistency,
   relative-import leftovers, enum value existence, asset references, named-arg
   spelling, unused imports (incl. dart: core libs), bracket balance,
   string-enum residue, unused deps, **used-but-not-imported symbols**,
-  **lint 6 naming & underscores**.
+  **lint 6 naming & underscores**, **ConsumerState ↔ widget pairing**.
   含**强制漏报反哺机制**：宿主 flutter 报出的漏报须归类 → 补斧 → 反向验证 → 登记
   `MISSES.md`（漏报台账，唯一真源）。
   Includes a **mandatory miss-feedback loop**: escapes reported by the host must be
@@ -26,12 +27,12 @@ description: >-
 
 WorkBuddy 沙箱无法运行 `flutter` / `dart`（Windows 子进程管道 `ERROR_PIPE_BUSY 231`），
 但改完 Dart 代码仍需验证不会引入编译期错误。本 skill 用**纯文本静态分析**替代 `flutter analyze`，
-对 Flutter 工程的 `lib/`（**v3 起默认一并体检 `test/`**）做十二板斧体检，
+对 Flutter 工程的 `lib/`（**v3 起默认一并体检 `test/`**）做十三板斧体检，
 覆盖那些最常见、最致命的编译期硬错与 lint 6 命名问题。
 The WorkBuddy sandbox cannot run `flutter` / `dart` (Windows subprocess pipe
 `ERROR_PIPE_BUSY 231`), yet edited Dart code still must be verified to avoid
 compile-time errors. This skill replaces `flutter analyze` with **pure-text
-static analysis**, running twelve checks over the project's `lib/`
+static analysis**, running thirteen checks over the project's `lib/`
 (**and `test/` by default since v3**) to catch the most common and most fatal
 compile errors plus lint 6 naming issues.
 
@@ -60,12 +61,13 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 十二板斧检查项 / The Twelve Checks
+## 十三板斧检查项 / The Thirteen Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
-> v3 起 12 项。名字保留，避免打断既有文档与项目记忆里的引用。
-> The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3.
-> The name is kept so existing docs and project-memory references stay valid.
+> v3 起 12 项、**v4 起 13 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
+> **13 since v4**. The name is kept so existing docs and project-memory
+> references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
    Resolves `package:fitcoach/...` and confirms the target `.dart` file exists.
@@ -107,6 +109,14 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       Consecutive underscores (`__` / `___`) → `unnecessary_underscores`. Use N **single** `_` for unused params (`(_, _)`); do not drop params (causes `argument_type_not_assignable`).
     - 顶层**私有函数/变量**写成 `_UpperCamel` → `non_constant_identifier_names`。⚠️ 私有**类** `_Foo` 是合法的（类走 UpperCamelCase），已排除。
       Private top-level **functions/variables** written as `_UpperCamel` → `non_constant_identifier_names`. ⚠️ Private **classes** `_Foo` are legal and are excluded.
+13. **ConsumerState ↔ ConsumerStatefulWidget 配对（ERROR）** / **ConsumerState pairing**: `class S extends ConsumerState<X>` 时 `X` **必须** `extends ConsumerStatefulWidget`；反之 `S extends State<X>` 时 `X` 必须 `extends StatefulWidget`。**双向**都查。
+    If `class S extends ConsumerState<X>` then `X` **must** extend `ConsumerStatefulWidget`; conversely `S extends State<X>` requires plain `StatefulWidget`. Checked in **both** directions.
+    - **v4 新增**，起因是 2026-10-03 fitcoach E9-a 实踩：State 侧为了用 `ref.watch` 改成了 `ConsumerState`，widget 侧仍是 `StatefulWidget` → `type_argument_not_matching_bounds`；连带所有 import 该 widget 的测试文件一起 `Failed to load`（**报错量看着吓人，实际一个根因**）。
+      **Added in v4** after a real miss: the State was switched to `ConsumerState` to use `ref.watch`, but the widget stayed `StatefulWidget` → `type_argument_not_matching_bounds`; every test importing that widget then failed to load (**many errors, one root cause**).
+    - 正解 / Correct fix：两侧**同时**改 —— `class X extends ConsumerStatefulWidget` + `ConsumerState<X> createState() => _XState();`。
+      Change **both** sides together: `class X extends ConsumerStatefulWidget` **and** `ConsumerState<X> createState() => _XState();`.
+    - 降噪 / De-noising：**只在本文件内配对**（widget 与 State 通常同文件），跨文件 widget 跳过不猜 → 干净工程零误报。
+      Pairs **within the same file only** (widget and State normally live together); cross-file widgets are skipped → zero false positives on a clean project.
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 

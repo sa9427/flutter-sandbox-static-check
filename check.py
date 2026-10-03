@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Flutter 沙箱静态体检（九板斧 / v3 起 12 项）—— 纯标准库，无第三方依赖。
+Flutter 沙箱静态体检（九板斧 / v4 起 13 项）—— 纯标准库，无第三方依赖。
 
 对 Flutter 工程的 lib/（v3 起默认含 test/）做文本静态检查，替代无法运行的 flutter analyze。
 用法：
@@ -944,6 +944,41 @@ def check_lint_naming(files, findings):
                                     '(lint6 non_constant_identifier_names)' % m.group(1))))
 
 
+# ── 检查 14：ConsumerState ↔ ConsumerStatefulWidget 配对（ERROR，v4 新增）──
+# 2026-10-03 fitcoach E9-a：State 侧为了用 ref.watch 改成 ConsumerState，
+# widget 侧仍是 StatefulWidget → type_argument_not_matching_bounds。
+# 危害被放大：一个 widget 编译失败 → 所有 import 它的测试文件一起
+# 「Failed to load」（看着一堆错，实际一个根因），必须先抓出来。
+# 判定只在本文件内配对（widget 与 State 通常同文件），跨文件不猜 → 零误报。
+def check_consumer_state_pair(files, findings):
+    w_re = re.compile(r'\bclass\s+(\w+)\s+extends\s+(ConsumerStatefulWidget|StatefulWidget)\b')
+    s_re = re.compile(r'\bclass\s+(\w+)\s+extends\s+(ConsumerState|State)\s*<\s*(\w+)\s*>')
+    for fp in files:
+        text = read(fp)
+        code = mask_strings_comments(text)
+        widgets = {m.group(1): m.group(2).startswith('Consumer')
+                   for m in w_re.finditer(code)}
+        if not widgets:
+            continue
+        for m in s_re.finditer(code):
+            base, target = m.group(2), m.group(3)
+            if target not in widgets:
+                continue                      # 跨文件 widget：不做猜测
+            if base.startswith('Consumer') != widgets[target]:
+                lineno = text.count('\n', 0, m.start()) + 1
+                want = ('ConsumerStatefulWidget' if base.startswith('Consumer')
+                        else 'StatefulWidget')
+                findings.append(('ERROR', 'C14', fp, lineno,
+                                 bi('%s extends %s<%s> → %s 必须 extends %s'
+                                    '（两侧 Consumer 不一致 = '
+                                    'type_argument_not_matching_bounds）'
+                                    % (m.group(1), base, target, target, want),
+                                    '%s extends %s<%s> → %s must extend %s '
+                                    '(Consumer mismatch on the two sides = '
+                                    'type_argument_not_matching_bounds)'
+                                    % (m.group(1), base, target, target, want))))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -996,6 +1031,7 @@ def main():
     check_unused_deps(files, runtime_deps, findings)
     check_missing_imports(files, lib_dir, symbols, findings, pkg, part_map, export_map)
     check_lint_naming(files, findings)
+    check_consumer_state_pair(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']

@@ -74,12 +74,13 @@ python3 check.py --no-test
 
 结尾打印 / Prints at the end: `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 十二板斧检查项 / The Twelve Checks
+## 十三板斧检查项 / The Thirteen Checks
 
 > 名称沿革 / Naming note：skill 名 "九板斧 / Nine-Axe" 是历史叫法；
-> v2 起已有 10 项、v3 起 12 项，名字保留以免打断既有文档与记忆中的引用。
-> The skill name "Nine-Axe" is historical; it had 10 checks since v2 and 12
-> since v3. The name is kept to avoid breaking existing docs and references.
+> v2 起已有 10 项、v3 起 12 项、**v4 起 13 项**，名字保留以免打断既有文档与记忆中的引用。
+> The skill name "Nine-Axe" is historical; it had 10 checks since v2, 12
+> since v3, and **13 since v4**. The name is kept to avoid breaking existing
+> docs and references.
 
 | 编号 / # | 检查 / Check | 级别 / Level | 说明 / Notes |
 |---|---|---|---|
@@ -95,6 +96,7 @@ python3 check.py --no-test
 | C10 | 未用依赖 / Unused dependency | HINT | pubspec 声明但无任何文件 import 的运行时依赖 / Declared in pubspec but never imported |
 | C11 | 符号用到但没 import / Used-but-not-imported symbol | ERROR | **v3 新增**：用了某符号却没 import 定义它的文件（Dart import 不传递）；已按 part/export 闭包、成员访问、命名实参降噪 / **added in v3**: symbol used without importing its defining file (Dart imports are not transitive); de-noised via part/export closure, member access, named args |
 | C12 | lint 6 命名与下划线 / lint 6 naming & underscores | HINT | **v3 新增**：标识符含连续下划线（`__`）、顶层私有函数写成 `_UpperCamel` / **added in v3**: consecutive underscores in identifiers, private top-level functions written as `_UpperCamel` |
+| C14 | ConsumerState ↔ widget 配对 / ConsumerState pairing | ERROR | **v4 新增**：`ConsumerState<X>` 要求 `X extends ConsumerStatefulWidget`（反之亦然），双向检查、仅同文件配对 / **added in v4**: `ConsumerState<X>` requires `X extends ConsumerStatefulWidget` (and vice versa); both directions, same-file only |
 
 脚本自动跳过生成文件（`*.g.dart` / `*.freezed.dart` / `build/` / `.dart_tool/`）。
 The script auto-skips generated files (`*.g.dart` / `*.freezed.dart` / `build/` / `.dart_tool/`).
