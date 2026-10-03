@@ -12,6 +12,11 @@ description: >-
   spelling, unused imports (incl. dart: core libs), bracket balance,
   string-enum residue, unused deps, **used-but-not-imported symbols**,
   **lint 6 naming & underscores**.
+  含**强制漏报反哺机制**：宿主 flutter 报出的漏报须归类 → 补斧 → 反向验证 → 登记
+  `MISSES.md`（漏报台账，唯一真源）。
+  Includes a **mandatory miss-feedback loop**: escapes reported by the host must be
+  classified → turned into an axe → reverse-validated → recorded in `MISSES.md`
+  (escape ledger, single source of truth).
 ---
 
 # Flutter 沙箱静态体检（九板斧）
@@ -112,12 +117,45 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 本工具仅吸取**概念与思路**，未复制任何第三方代码；如将来引入具体实现，须遵守对应许可证并保留署名。
   This tool borrows **concepts and ideas only**, copying no third-party code; any future concrete implementation must comply with the relevant license and retain attribution.
 
+## 反哺机制：漏报 → 补斧（强制）/ Feedback Loop: Miss → New Axe (mandatory)
+
+宿主真跑 `flutter analyze` / `flutter test` 报出的**每一条**问题，都要先问一句：
+**九板斧为什么没抓到？** 如果是漏报，就必须补斧，**不能只改业务代码就完事**——
+否则同类问题会反复漏（M-001 一条漏 import 就报了 4 个 error）。
+
+For **every** issue reported by the host's real `flutter analyze` / `flutter test`,
+ask first: **why did the checker miss it?** If it is a miss, add/improve an axe.
+Never just fix the business code — otherwise the same class of bug keeps escaping.
+
+完整流程与台账见 **`MISSES.md`**（漏报的唯一真源，含每条的最小复现）。
+Full workflow and the ledger live in **`MISSES.md`** (single source of truth for
+escapes, with a minimal repro per entry).
+
+六步闭环 / Six-step loop：
+1. **确认是漏报**——九板斧复跑该文件（默认已含 `test/`），确认零告警。
+2. **归类**——检查项**缺失**（新增一斧）／被**降噪滤掉**（收紧过滤）／**口径不对**（修正逻辑）。
+3. **补/改** `check.py`，同步 `SKILL.md` / `README.md` 的清单与计数。
+4. **反向验证（强制）**——把问题代码临时改回原样 → 跑九板斧 → 确认新斧命中 →
+   **还原** → `git status` 为空 + 复跑干净。**没做这步等于没验证。**
+5. **登记 `MISSES.md`**——务必写清最小复现。
+6. **commit**（默认只 commit 不 push）。
+
+⚠️ **改动过滤/降噪规则时，必须回看 `MISSES.md` 并重跑相关复现**：
+降噪改宽是「已闭环漏报悄悄复发」的头号原因。
+When touching filters, re-read `MISSES.md` and re-run the affected repros:
+loosening de-noising is the #1 cause of closed escapes silently returning.
+
 ## 使用纪律 / Usage Discipline
 
 - 这是**静态近似，不是编译器**：ERROR 基本可信，HINT 可能误报，需结合人工判断。
   This is a **static approximation, not a compiler**: ERROR is mostly trustworthy, HINT may be a false positive and needs human judgement.
 - 每次改完 Dart 代码跑一遍，确认 `RESULT: 工程干净 ✅` 后再提交。
   Run it after every Dart edit; only commit once `RESULT: 工程干净 ✅` is confirmed.
+- **宿主复验报了问题就走反哺流程**（见上一节 `MISSES.md`）：先判断是不是漏报，
+  是漏报就补斧 + 反向验证 + 登记台账。
+  When the host's verification reports an issue, run the feedback loop (see
+  `MISSES.md`): decide whether it was a miss; if so, add an axe, reverse-validate,
+  and record it in the ledger.
 - 权威终验仍以用户原生终端的 `flutter analyze` 为准（沙箱跑不了 flutter）。
   The authoritative final check remains `flutter analyze` on the user's native terminal (the sandbox cannot run flutter).
 

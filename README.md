@@ -99,6 +99,23 @@ python3 check.py --no-test
 脚本自动跳过生成文件（`*.g.dart` / `*.freezed.dart` / `build/` / `.dart_tool/`）。
 The script auto-skips generated files (`*.g.dart` / `*.freezed.dart` / `build/` / `.dart_tool/`).
 
+## 漏报反哺机制 / Miss-Feedback Loop
+
+**宿主 `flutter analyze` / `flutter test` 报出的每一条问题，都要先问：九板斧为什么没抓到？**
+是漏报就必须补斧，不能只改业务代码了事。
+For **every** issue the host's `flutter analyze`/`flutter test` reports, ask first:
+*why did the checker miss it?* A miss must become a new axe — never just fix the code.
+
+六步闭环（详见 `MISSES.md`）：确认漏报 → 归类（缺斧／被降噪滤掉／口径错）→ 补/改 `check.py`
+→ **反向验证（强制：把 bug 改回原样确认新斧命中，再还原）** → 登记 `MISSES.md` → commit。
+Six steps (see `MISSES.md`): confirm the miss → classify → fix `check.py` →
+**reverse-validate (mandatory)** → record in `MISSES.md` → commit.
+
+📄 **`MISSES.md`** = 漏报台账（唯一真源），含每条漏报的根因、对应斧号与**最小复现**。
+改动过滤/降噪规则时必须回看重跑复现——降噪改宽是已闭环漏报复发的头号原因。
+`MISSES.md` is the escape ledger (single source of truth) with root cause, axe, and
+a **minimal repro** per entry. Re-run the repros whenever filters change.
+
 ## 使用纪律 / Usage Discipline
 
 1. 这是**静态近似，不是编译器**：ERROR 基本可信，HINT 需结合人工判断。

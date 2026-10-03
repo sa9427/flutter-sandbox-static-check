@@ -1026,6 +1026,11 @@ def main():
     else:
         print('\n' + bi('RESULT: 发现 %d 处问题 ⚠️' % len(findings),
                        'RESULT: found %d issue(s) ⚠️' % len(findings)))
+    # 每次运行都提醒反哺：宿主 flutter 报出本工具没抓到的问题时，必须补斧而不是只改业务代码
+    print('\n' + bi('📌 宿主 flutter 若报出本工具未抓到的问题 → 走反哺流程补斧'
+                    '（见 MISSES.md 漏报台账）',
+                    '📌 If the host\'s flutter reports an issue this tool missed → run the '
+                    'feedback loop and add an axe (see MISSES.md escape ledger)'))
 
 
 if __name__ == '__main__':
