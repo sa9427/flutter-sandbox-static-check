@@ -149,6 +149,14 @@ loosening de-noising is the #1 cause of closed escapes silently returning.
 
 - 这是**静态近似，不是编译器**：ERROR 基本可信，HINT 可能误报，需结合人工判断。
   This is a **static approximation, not a compiler**: ERROR is mostly trustworthy, HINT may be a false positive and needs human judgement.
+- **本工具查不到的一类错 —— 编辑时吞掉声明行**：用 Edit **替换 / 删除**代码块时，
+  若 `old_string` 含声明行而 `new_string` 没带回，等于静默删除 → 引用未定义标识符
+  （如吞掉 `final power = ...` 后 `power` 无定义）。纯文本无法可靠解析局部作用域
+  （见 `MISSES.md` M-004 的实验与结论），**故纪律是**：改完重读改动处邻近 10 行。
+  Editing pitfall this tool cannot catch: replacing/deleting a block and silently
+  dropping a declaration line (`final power = ...`) leaves undefined references.
+  Pure-text analysis cannot resolve local scope reliably (see M-004), **so the rule is**:
+  re-read the ~10 lines around every edit.
 - 每次改完 Dart 代码跑一遍，确认 `RESULT: 工程干净 ✅` 后再提交。
   Run it after every Dart edit; only commit once `RESULT: 工程干净 ✅` is confirmed.
 - **宿主复验报了问题就走反哺流程**（见上一节 `MISSES.md`）：先判断是不是漏报，

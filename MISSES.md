@@ -89,6 +89,31 @@
   应报 `C12 ... plateau_card.dart:101 私有声明 _DeloadBlock 应为 lowerCamelCase`。
 - **状态**：✅ 已补斧并反向验证通过。
 
+### M-004 · 2026-10-03 · fitcoach E9-a(C29) · 引用了但本文件从未声明的局部标识符 → **不补斧（能力边界）**
+
+- **症状**：一次 Edit **替换代码块时吞掉了 `final power = ...` / `final hr = ...` 两行声明**，
+  结果 `power` / `hr` 被引用却无定义 —— 宿主 `flutter analyze` 会报一串
+  `Undefined name 'power'`，必编译失败。
+- **根因**：编辑事故，非代码风格问题。`old_string` 里带了这两行、`new_string` 没带回，
+  等价于静默删除（是「插入勿吞锚点行」的**删除变体**）。
+- **旧九板斧为何漏**：C11 只管**跨文件 import** 层，局部声明层完全没覆盖。
+- **归类**：⬜ **不补斧** —— 属**能力边界**，详见下方实验结论。
+- **实验（已做，可复盘，别重复造）**：原型 C13「标识符被引用但本文件找不到声明位置」
+  （HINT 级，宁可漏报策略：形参/实参/赋值左侧/调用/成员访问/命名实参一律视为已声明）。
+  在已知干净的 fitcoach 上跑出**大量误报**，主要四类：
+  ① 注解 `override`（以及 `protected` / `visibleForTesting` 等）；
+  ② 小写**内置类型名** `bool` / `double` / `int`（出现在 `List<bool>` 泛型位，不在声明位）；
+  ③ **getter** 声明（`String get setLabel =>`）没被声明正则捕获；
+  ④ **import 进来的外部符号**（`databaseFactoryWeb` / `stringMapStoreFactory` /
+  `showModalBottomSheet` / `muscleLabels` 等）—— 纯文本无法知道它们来自哪个包。
+- **结论**：要压到可接受误报率，必须实现**作用域 + import 解析**，等价于写一遍编译器，
+  与「纯文本近似」的定位冲突。**收益 < 成本，且不补斧的代价很低**：
+  这类错误是**确定性编译错误**，宿主 `flutter analyze` 第一轮就会报出来。
+- **改为人工纪律（已写进 SKILL.md 使用纪律）**：
+  **Edit 替换/删除代码块后，重读改动处邻近 10 行，确认没有吞掉声明行。**
+  （与既有记忆规则「插入勿吞锚点行」是同一条，本次补上**删除/替换变体**。）
+- **状态**：⬜ 不补斧（能力边界，已记录实验证据与替代纪律）。
+
 ---
 
 ## 新条目模板 / Template for New Entries
