@@ -166,6 +166,32 @@
   改为**只认有初始化的变量**（`DateTime x = ...`），形参一律不算。
 - **反向验证**：fitcoach 修复后复跑 → **C15 零告警**（仅剩 4 条已知 C6 HINT）。
 - **状态**：✅ 已补斧并反向验证通过（2026-10-04）。
+- **⭐ 2026-10-04 二次泛化（需求方指出"发现一例累加一例"）**：本条**当时就是个例斧**
+  （只认 DateTime + `.date`）。现已把 C15 升格为**通用成员存在性斧**：
+  机制（接收者 → 类型 → 成员集合）留在斧里，符号进 **表**
+  （`DART_TYPE_MEMBERS` / `DART_STATIC_MEMBERS` / `DART_CHAIN_RETURN` + 工程类扫描）。
+  新增个例 = 往表里加一行。泛化后复验：正例 6/6（DateTime.date ×2 / String.lenght /
+  List.lenght / Duration.inHour / 工程类 Foo.barr），反例（对象字段、注释、字符串、
+  lambda 形参、静态访问、跨作用域同名）**零误报**，fitcoach 91 文件复跑零告警。
+
+---
+
+### M-007 · 2026-10-04 · fitcoach(#31 S2) · lint `prefer_initializing_formals` → **新增 C16（表驱动 lint）**
+
+- **症状**：宿主 `flutter analyze` 报 `info - Use an initializing formal to assign a parameter
+  to a field ... lib\widgets\adaptive.dart:33:8 - prefer_initializing_formals`。
+- **根因**：`AdaptiveLayoutInfo._({required LayoutClass layout}) : _layout = layout;`
+  应写成 `required this._layout`。
+- **旧九板斧为何漏**：C12 只做了**工程特有**的两条（连续下划线 / 私有命名），
+  **没有一张可扩的通用 lint 表** → 每来一条新 lint 都只能手工改代码 + 再补一把斧。
+- **补的斧**：新增 **C16（lint 规则表，表驱动）**，`LINT_RULES` 首批收录
+  `prefer_initializing_formals`；以后新增 lint **加一项**即可。
+- **最小复现**：`/tmp/c16check/lib/b.dart`：`Bad(int a, {required int b}) : _a = a, _b = b;`
+  → 应报 2 处；`Good(this.a)` 与 `AlsoFine(int y) : x = y + 1;` 都不应报
+  （实测 2/2 命中、反例零误报）。
+- **降噪坑（实测两处）**：①右侧必须**就是**参数名（`x = y + 1` 是真初始化，不能报），
+  故加 `(?=,|$)` 锚定；②命名参数段要**剥掉 `{}`**（`{required int b}` → 否则取不到 `b`）。
+- **状态**：✅ 已补斧并反向验证通过（2026-10-04）。fitcoach 复跑 C16 零告警（已修）。
 
 ---
 

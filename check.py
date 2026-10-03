@@ -979,43 +979,463 @@ def check_consumer_state_pair(files, findings):
                                     % (m.group(1), base, target, target, want))))
 
 
-def check_datetime_date_member(files, findings):
-    """C15 · DateTime 上取 `.date`（DateTime 无此成员 → undefined_getter 编译硬错）。
+# ── C15（2026-10-04 泛化版）· 成员存在性：机制是斧，符号是表 ─────────────
+#
+# 旧 C15 只认「DateTime + .date」一例（M-006），属于"发现一例硬编码一例"。
+# 泛化后：
+#   - **机制（斧）**：把「接收者 → 类型 → 成员集合」解析出来再比对；
+#     **类型判定不了就跳过**，宁可漏也不误报。
+#   - **数据（表）**：`DART_TYPE_MEMBERS`（dart:core 常用类型）+ 工程内类成员（动态扫描）。
+# 以后遇到新的"某某类型上没有某某成员"，**往表里加一行即可，不必再写一把斧**。
 
-    典型笔误：想把 DateTime 截断成"日期"，写成 `_now.subtract(...).date`。
-    DateTime 只有 year / month / day / hour…，取日期应构造 `DateTime(y, m, d)`。
-    只在**接收者可判定为 DateTime** 时报错（显式声明 DateTime / 推断为 DateTime /
-    `DateTime(...)` 字面构造 / 链式 add·subtract·toLocal·toUtc），
-    以免把 `session.date`、`widget.date` 这类**对象字段**误报。
+# dart:core / dart:convert 常用类型的成员表（只列"容易出现笔误"的高频类型）
+DART_TYPE_MEMBERS = {
+    'DateTime': {
+        'year', 'month', 'day', 'hour', 'minute', 'second', 'millisecond', 'microsecond',
+        'millisecondsSinceEpoch', 'microsecondsSinceEpoch', 'weekday', 'timeZoneName',
+        'timeZoneOffset', 'isUtc', 'add', 'subtract', 'difference', 'isAfter', 'isBefore',
+        'isAtSameMomentAs', 'compareTo', 'toLocal', 'toUtc', 'toIso8601String',
+    },
+    'String': {
+        'length', 'isEmpty', 'isNotEmpty', 'codeUnits', 'compareTo', 'contains', 'endsWith',
+        'startsWith', 'indexOf', 'lastIndexOf', 'padLeft', 'padRight', 'replaceAll',
+        'replaceFirst', 'replaceRange', 'replaceAllMapped', 'split', 'substring',
+        'toLowerCase', 'toUpperCase', 'trim', 'trimLeft', 'trimRight', 'splitMapJoin',
+        'codeUnitAt', 'allMatches', 'matchAsPrefix',
+    },
+    'Duration': {
+        'inDays', 'inHours', 'inMinutes', 'inSeconds', 'inMilliseconds', 'inMicroseconds',
+        'isNegative', 'abs', 'compareTo',
+    },
+    'num': {
+        'isNaN', 'isNegative', 'isFinite', 'isInfinite', 'sign', 'abs', 'round', 'floor',
+        'ceil', 'truncate', 'clamp', 'compareTo', 'remainder', 'toDouble', 'toInt',
+        'toStringAsFixed', 'toStringAsPrecision', 'toStringAsExponential',
+    },
+    'int': {
+        'isEven', 'isOdd', 'bitLength', 'gcd', 'modInverse', 'modPow', 'toRadixString',
+    },
+    'double': set(),
+    'bool': set(),
+    'Iterable': {
+        'length', 'isEmpty', 'isNotEmpty', 'first', 'last', 'single', 'iterator', 'hashCode',
+        'contains', 'elementAt', 'map', 'where', 'whereType', 'expand', 'fold', 'reduce',
+        'forEach', 'every', 'any', 'join', 'take', 'skip', 'takeWhile', 'skipWhile',
+        'toList', 'toSet', 'cast', 'firstWhere', 'lastWhere', 'singleWhere', 'followedBy',
+    },
+    'List': {
+        'add', 'addAll', 'clear', 'remove', 'removeAt', 'removeLast', 'removeWhere',
+        'retainWhere', 'indexOf', 'indexWhere', 'lastIndexWhere', 'insert', 'insertAll',
+        'setAll', 'fillRange', 'replaceRange', 'getRange', 'setRange', 'removeRange',
+        'sublist', 'asMap', 'sort', 'shuffle', 'reversed',
+    },
+    'Set': {
+        'add', 'addAll', 'clear', 'remove', 'removeAll', 'removeWhere', 'retainAll',
+        'retainWhere', 'contains', 'containsAll', 'lookup', 'union', 'intersection',
+        'difference',
+    },
+    'Map': {
+        'keys', 'values', 'entries', 'containsKey', 'containsValue', 'putIfAbsent',
+        'update', 'updateAll', 'remove', 'clear', 'addAll', 'addEntries', 'removeWhere',
+        'map', 'forEach', 'cast',
+    },
+    'Future': {'then', 'catchError', 'whenComplete', 'timeout', 'asStream'},
+    'Uri': {
+        'scheme', 'host', 'port', 'path', 'query', 'queryParameters', 'queryParametersAll',
+        'fragment', 'origin', 'userInfo', 'authority', 'hasScheme', 'hasAuthority',
+        'hasPort', 'hasQuery', 'hasFragment', 'isAbsolute', 'isScheme', 'replace',
+        'resolve', 'resolveUri', 'toFilePath', 'data', 'directory', 'file', 'http', 'https',
+    },
+    'RegExp': {
+        'pattern', 'isCaseSensitive', 'isMultiLine', 'isDotAll', 'isUnicode', 'hasMatch',
+        'firstMatch', 'allMatches', 'stringMatch',
+    },
+    'StringBuffer': {'write', 'writeAll', 'writeln', 'writeCharCode', 'clear'},
+    'MapEntry': {'key', 'value'},
+    'RegExpMatch': {'group', 'groupCount', 'start', 'end', 'pattern', 'input'},
+}
+
+# 类型继承（成员集合取并集）
+DART_TYPE_PARENTS = {'int': 'num', 'double': 'num', 'List': 'Iterable', 'Set': 'Iterable'}
+
+# 链式方法的返回类型（只登记**确定**的几条；查不到就整体跳过，不猜）
+DART_CHAIN_RETURN = {
+    ('DateTime', 'add'): 'DateTime', ('DateTime', 'subtract'): 'DateTime',
+    ('DateTime', 'toLocal'): 'DateTime', ('DateTime', 'toUtc'): 'DateTime',
+    ('Duration', 'abs'): 'Duration',
+    ('String', 'toUpperCase'): 'String', ('String', 'toLowerCase'): 'String',
+    ('String', 'trim'): 'String', ('String', 'trimLeft'): 'String',
+    ('String', 'trimRight'): 'String', ('String', 'substring'): 'String',
+    ('String', 'padLeft'): 'String', ('String', 'padRight'): 'String',
+    ('String', 'replaceAll'): 'String', ('String', 'replaceFirst'): 'String',
+    ('String', 'replaceRange'): 'String', ('String', 'replaceAllMapped'): 'String',
+    ('List', 'toList'): 'List', ('Set', 'toList'): 'List', ('Iterable', 'toList'): 'List',
+    ('List', 'toSet'): 'Set', ('Set', 'toSet'): 'Set', ('Iterable', 'toSet'): 'Set',
+    ('Iterable', 'where'): 'Iterable', ('Iterable', 'map'): 'Iterable',
+    ('Iterable', 'expand'): 'Iterable', ('Iterable', 'whereType'): 'Iterable',
+    ('List', 'where'): 'Iterable', ('List', 'map'): 'Iterable',
+    ('Iterable', 'reversed'): 'Iterable', ('List', 'reversed'): 'Iterable',
+    ('Map', 'keys'): 'Iterable', ('Map', 'values'): 'Iterable', ('Map', 'entries'): 'Iterable',
+    ('RegExp', 'firstMatch'): 'RegExpMatch', ('RegExp', 'allMatches'): 'Iterable',
+    ('num', 'abs'): 'num', ('int', 'abs'): 'num', ('double', 'abs'): 'num',
+    ('int', 'toDouble'): 'double', ('double', 'toInt'): 'int', ('num', 'toInt'): 'int',
+}
+
+# 任何类型都有的成员（Object）
+SAFE_ANY_MEMBERS = {'toString', 'hashCode', 'runtimeType', 'noSuchMethod'}
+
+
+
+# dart 类型的**静态**成员（DateTime.now() / List.filled() 这类；旧版把它们当实例成员查 → 误报）
+DART_STATIC_MEMBERS = {
+    'DateTime': {'now', 'parse', 'tryParse', 'fromMillisecondsSinceEpoch',
+                 'fromMicrosecondsSinceEpoch', 'utc'},
+    'Duration': set(),
+    'String': {'fromCharCodes', 'fromEnvironment'},
+    'int': {'parse', 'tryParse'},
+    'double': {'parse', 'tryParse'},
+    'num': {'parse', 'tryParse'},
+    'List': {'filled', 'generate', 'empty', 'of', 'from', 'unmodifiable', 'castFrom',
+             'copyRange'},
+    'Set': {'from', 'of', 'identity', 'unmodifiable', 'castFrom'},
+    'Map': {'from', 'of', 'fromEntries', 'identity', 'unmodifiable', 'castFrom', 'fromIterables'},
+    'Iterable': {'empty', 'generate', 'castFrom'},
+    'Future': {'wait', 'any', 'forEach', 'doWhile', 'sync', 'value', 'error', 'delayed',
+               'microtask'},
+    'Uri': {'parse', 'tryParse', 'http', 'https', 'file', 'directory', 'data'},
+    'RegExp': set(),
+    'StringBuffer': set(),
+    'MapEntry': set(),
+}
+
+
+def _dart_members(t, with_static=False):
+    """dart 类型的成员集合（含父类型）。不在表里 → None（不可判定，调用方跳过）。"""
+    if t not in DART_TYPE_MEMBERS:
+        return None
+    out = set(DART_TYPE_MEMBERS[t]) | SAFE_ANY_MEMBERS
+    if with_static:
+        out |= DART_STATIC_MEMBERS.get(t, set())
+    p = DART_TYPE_PARENTS.get(t)
+    while p:
+        out |= DART_TYPE_MEMBERS.get(p, set())
+        if with_static:
+            out |= DART_STATIC_MEMBERS.get(p, set())
+        p = DART_TYPE_PARENTS.get(p)
+    return out
+
+
+def _iter_type_blocks(code):
+    """产出 (kind, name, extra, body)，kind ∈ {class, mixin, extension}。"""
+    pat = re.compile(r'\b(?:abstract\s+|base\s+|final\s+|sealed\s+|interface\s+|mixin\s+)*'
+                     r'(class|mixin|extension)(?:\s+(\w+))?([^{]*)\{')
+    for m in pat.finditer(code):
+        start, depth, i, n = m.end(), 1, m.end(), len(code)
+        while i < n and depth:
+            c = code[i]
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+            i += 1
+        yield m.group(1), (m.group(2) or ''), m.group(3), code[start:i - 1]
+
+
+def _body_members(body):
+    """收集类体里的成员名。**宁可多收**（多收 = 少报，不会误报）。"""
+    out = set()
+    for raw in body.split('\n'):
+        line = raw.strip()
+        if not line or line.startswith('//'):
+            continue
+        # 方法 / 构造函数：`... name(`
+        m = re.match(r'(?:@\w+(?:\([^()]*\))?\s+)*(?:external\s+|static\s+|final\s+|late\s+|'
+                     r'const\s+|covariant\s+|override\s+|factory\s+)*'
+                     r'[\w<>?,\s\[\]{}]*?\s+(\w+)\s*\(', line)
+        if m:
+            out.add(m.group(1))
+            continue
+        # 字段：`... name = ...;` / `... name;`
+        m = re.match(r'(?:@\w+(?:\([^()]*\))?\s+)*(?:static\s+|final\s+|late\s+|const\s+|'
+                     r'covariant\s+)*[\w<>?,\s\[\]{}]+?\s+(\w+)\s*(?:=|;|,)', line)
+        if m:
+            out.add(m.group(1))
+        m = re.search(r'\b(?:static\s+)?(?:get|set)\s+(\w+)', line)
+        if m:
+            out.add(m.group(1))
+        out.update(re.findall(r'this\.(\w+)', line))
+    return out
+
+
+def _supers_of(extra):
+    """解析 extends / with / implements 的类型名（先剥泛型）。"""
+    flat = re.sub(r'<[^<>]*>', ' ', extra)
+    out = []
+    for m in re.finditer(r'\b(?:extends|with|implements)\s+([^{]+)', flat):
+        out += re.findall(r'[A-Za-z_]\w*', m.group(1))
+    return out
+
+
+def _collect_project_types(files):
+    """扫工程内 class / mixin / extension，得 {类型名: {members, supers, opaque}}。"""
+    types = {}
+    ext_on = {}
+    for fp in files:
+        code = mask_strings_comments(read(fp))
+        for kind, name, extra, body in _iter_type_blocks(code):
+            if kind == 'extension':
+                m = re.search(r'\bon\s+([A-Za-z_]\w*)', extra)
+                ext_on.setdefault(m.group(1) if m else '', set()).update(_body_members(body))
+                continue
+            types[name] = {'members': _body_members(body), 'supers': _supers_of(extra)}
+    # extension 成员并入目标类型
+    for target, members in ext_on.items():
+        if target in types:
+            types[target]['members'] |= members
+        elif target in DART_TYPE_MEMBERS:
+            DART_TYPE_MEMBERS[target] |= members
+    # opaque：继承链里有工程外类型（框架 / SDK）→ 成员集合不完整，不查
+    for name, info in types.items():
+        info['opaque'] = any(s not in types for s in info['supers'])
+    return types
+
+
+def _project_members(types, name, memo, stack=()):
+    """工程类型的成员集合（含工程内继承链）；不可判定（opaque / 找不到）→ None。"""
+    if name in memo:
+        return memo[name]
+    if name not in types or name in stack:
+        return None
+    info = types[name]
+    if info['opaque']:
+        memo[name] = None
+        return None
+    out = set(info['members'])
+    for s in info['supers']:
+        sub = _project_members(types, s, memo, stack + (name,))
+        if sub is None:
+            memo[name] = None
+            return None
+        out |= sub
+    memo[name] = out | SAFE_ANY_MEMBERS
+    return memo[name]
+
+
+def _infer_type(rhs):
+    """从 `= <rhs>` 右侧推断类型；推断不了 → None。"""
+    r = rhs.strip()
+    r = re.sub(r'^(?:const|new|await)\s+', '', r)
+    if r.startswith('DateTime'):
+        return 'DateTime'
+    if r[:1] in ('"', "'"):
+        return 'String'
+    if re.match(r'^-?\d+$', r):
+        return 'int'
+    if re.match(r'^-?\d+\.\d+$', r):
+        return 'double'
+    if r in ('true', 'false'):
+        return 'bool'
+    if r.startswith('[') or re.match(r'^<[^>]*>\s*\[', r):
+        return 'List'
+    # 只有**大写开头**才是构造调用（`Foo()`）；`obj.method()` 不能当成构造。
+    # 构造后若还有链式调用（`RegExp(...).firstMatch(x)`），按返回类型继续推进。
+    m = re.match(r'^([A-Z]\w*)\s*\((?:[^()]|\([^()]*\))*\)', r)
+    if m:
+        t = m.group(1)
+        for cm in re.finditer(r'\.\s*(\w+)\s*\((?:[^()]|\([^()]*\))*\)', r[m.end():]):
+            nt = DART_CHAIN_RETURN.get((t, cm.group(1)))
+            if nt is None:
+                return None
+            t = nt
+        return t
+    return None
+
+
+def _brace_events(code):
+    """[(pos, depth_before, depth_after, is_open)]，用于按**作用域**判定变量可见性。"""
+    events = []
+    depth = 0
+    for m in re.finditer(r'[{}]', code):
+        if m.group(0) == '{':
+            events.append((m.start(), depth, depth + 1, True))
+            depth += 1
+        else:
+            depth -= 1
+            events.append((m.start(), depth + 1, depth, False))
+    return events
+
+
+def _depth_at(events, pos):
+    d = 0
+    for p, _, after, _ in events:
+        if p >= pos:
+            break
+        d = after
+    return d
+
+
+def _scope_end(events, decl_pos, decl_depth):
+    """声明所在作用域的结束位置（第一个让它"出作用域"的 `}`）。"""
+    for p, _, after, is_open in events:
+        if is_open or p <= decl_pos:
+            continue
+        if after < decl_depth:
+            return p
+    return None
+
+
+def check_member_exists(files, findings):
+    """C15 · 成员存在性（undefined_getter）：类型可判定时，成员必须在成员集合里。
+
+    泛化要点（2026-10-04）：本斧只提供**机制**，
+    具体类型/成员写在 `DART_TYPE_MEMBERS` / `DART_STATIC_MEMBERS` 与工程类扫描里。
+    **类型判定不了就跳过** —— 零误报优先于覆盖率（这是九板斧的一贯取舍）。
     """
-    # 只认**有初始化的 DateTime 变量**（`DateTime x = ...`）。
-    # 形参（`DateTime d`）不认：同名标识符在不同函数里可能是别的类型，
-    # 会误报（实测 fitcoach `stats_service.dart` 的 `(d) => ... d.date` 就被误伤）。
-    var_re = re.compile(r'\bDateTime\s+(\w+)\s*=')
-    infer_re = re.compile(r'\b(?:final|var|late)\s+(?:final\s+)?(\w+)\s*=\s*DateTime\b')
-    # 参数允许一层嵌套（`const Duration(hours: 20)` 这类），否则链式调用匹配不到
+    types = _collect_project_types(files)
+    memo = {}
     arg = r'\([^()]*(?:\([^()]*\)[^()]*)*\)'
-    recv = (r'(?:DateTime\s*%s|DateTime\.\w+\s*%s|\b\w+\b)'
-            r'(?:\s*\.\s*(?:toLocal|toUtc|add|subtract)\s*%s)*' % (arg, arg, arg))
-    use_re = re.compile(r'(%s)\s*\.\s*date\b' % recv)
+    # 变量声明 / 推断：`Type x = ...` 或 `final x = <expr>;`
+    # ⚠️ **形参不算**：同名标识符跨函数可能是不同类型（实测误报过）。
+    decl_re = re.compile(r'\b(?:final\s+|late\s+|const\s+|var\s+)*'
+                         r'([A-Z]\w*)\s*(?:<[^<>]*>)?\s*\??\s+(\w+)\s*=')
+    infer_re = re.compile(r'\b(?:final|var|late)\s+(?:final\s+)?(\w+)\s*=\s*([^;{]+?)\s*;')
+    # 访问式：root(.method(arg))* .member
+    access_re = re.compile(
+        r'(?<![\w.])(DateTime\s*%(a)s|DateTime\.\w+\s*%(a)s|(?!(?:if|for|while|switch|catch|'
+        r'return|new|const|final|var|late|else|super|this|await|case)\b)[A-Za-z_]\w*)'
+        r'((?:\s*\??\.\s*\w+\s*%(a)s)*)\s*\??\.\s*(\w+)\b' % {'a': arg})
+
     for fp in files:
         text = read(fp)
         code = mask_strings_comments(text)
-        dt_vars = set(var_re.findall(code)) | set(infer_re.findall(code))
-        if not dt_vars and 'DateTime' not in code:
+        events = _brace_events(code)
+        decls = []                      # [(pos, depth, name, type)]
+        for m in decl_re.finditer(code):
+            decls.append((m.start(), _depth_at(events, m.start()), m.group(2), m.group(1)))
+        # 推断用**未遮蔽**的原文：字符串字面量被遮蔽成空格后就认不出 String 了
+        for m in infer_re.finditer(text):
+            t = _infer_type(m.group(2))
+            if t:
+                decls.append((m.start(), _depth_at(events, m.start()), m.group(1), t))
+        if not decls:
             continue
-        for m in use_re.finditer(code):
-            receiver = m.group(1)
-            root = re.match(r'\w+', receiver).group(0)
-            if receiver.startswith('DateTime') or root in dt_vars:
-                lineno = text.count('\n', 0, m.start()) + 1
-                findings.append(('ERROR', 'C15', fp, lineno,
-                                 bi('DateTime 上没有 `.date` 成员（undefined_getter 编译硬错）；'
-                                    '要「只要日期」请构造 DateTime(y, m, d)，'
-                                    '疑似笔误：`%s.date`' % receiver,
-                                    'DateTime has no `.date` getter (undefined_getter, '
-                                    'compile error); to truncate to a date build '
-                                    'DateTime(y, m, d). Suspect typo: `%s.date`' % receiver)))
+
+        for m in access_re.finditer(code):
+            root, chain, member = m.group(1), m.group(2), m.group(3)
+            if root.startswith('DateTime'):
+                t = 'DateTime'
+                static_like = True
+            else:
+                # 只在**可见作用域**内找同名声明（取最近的一条），避免跨函数同名误判
+                pos, depth = m.start(), _depth_at(events, m.start())
+                cand = None
+                for dpos, ddepth, dname, dtype in decls:
+                    if dname != root or dpos >= pos or ddepth > depth:
+                        continue
+                    end = _scope_end(events, dpos, ddepth)
+                    if end is not None and end < pos:
+                        continue
+                    if cand is None or dpos > cand[0]:
+                        cand = (dpos, dtype)
+                if cand is None:
+                    continue            # 类型判定不了 → 跳过（零误报优先）
+                t = cand[1]
+                static_like = False
+            # 链式推进：任一段返回类型未知 → 整体跳过
+            for cm in re.finditer(r'\.\s*(\w+)\s*\(', chain):
+                nt = DART_CHAIN_RETURN.get((t, cm.group(1)))
+                if nt is None:
+                    t = None
+                    break
+                t = nt
+            if not t:
+                continue
+
+            members = _dart_members(t, with_static=static_like)
+            if members is None:
+                members = _project_members(types, t, memo)
+                if members is None:
+                    continue            # 工程类型不可判定 → 跳过
+            if member in members or member in SAFE_ANY_MEMBERS:
+                continue
+            lineno = text.count('\n', 0, m.start()) + 1
+            recv = (root + chain).strip()
+            findings.append(('ERROR', 'C15', fp, lineno,
+                             bi('类型 %s 上没有成员 `%s`（undefined_getter 编译硬错），'
+                                '疑似笔误：`%s.%s`。'
+                                '（成员表见 check.py DART_TYPE_MEMBERS / 工程类扫描；'
+                                '新增个例请往表里加，不要再写一把斧）'
+                                % (t, member, recv, member),
+                                'type %s has no member `%s` (undefined_getter); suspect typo '
+                                '`%s.%s`' % (t, member, recv, member))))
+
+
+# ── C16（2026-10-04 新增）· lint 规则表（表驱动）─────────────────────────
+#
+# 与 C12 的分工：C12 是**工程特有**的两条（连续下划线 / 私有命名）；
+# C16 放**通用 lint 规则**，每条规则是表里的一项 —— 新增 lint 只需加一项，
+# 不必再"发现一例补一斧"。
+#
+# 首批：`prefer_initializing_formals`
+#   （2026-10-04 宿主 `flutter analyze` 报 `lib/widgets/adaptive.dart:33`，
+#    九板斧当时没抓到，只能手工修 —— 正是"缺一张 lint 表"的直接代价。）
+
+LINT_RULES = {
+    # 规则名 → (开关, 说明)
+    'prefer_initializing_formals': (
+        True,
+        '构造器参数只为赋给同名/异名字段时，应改用初始化形参 `this.x`'),
+    'unnecessary_this': (
+        False,
+        '（暂不开：`this.` 在工程里有可读性用途，开了噪音大于收益）'),
+}
+
+_CTOR_RE_TMPL = r'\b(?:const\s+|factory\s+)?%s\s*\(([^()]*)\)\s*(?::\s*([^{;]+?))?\s*(?:\{|=>|;)'
+
+
+def check_lint_table(files, findings):
+    """C16 · 表驱动 lint 规则（见 LINT_RULES）。"""
+    if not LINT_RULES.get('prefer_initializing_formals', (False, ''))[0]:
+        return
+    for fp in files:
+        text = read(fp)
+        code = mask_strings_comments(text)
+        for kind, name, extra, body in _iter_type_blocks(code):
+            if kind == 'extension' or not name:
+                continue
+            for cm in re.finditer(_CTOR_RE_TMPL % re.escape(name), body):
+                params_txt, init_txt = cm.group(1), cm.group(2) or ''
+                if not init_txt or '=' not in init_txt:
+                    continue
+                # 参数名：每段取最后一个标识符
+                params = set()
+                for seg in params_txt.split(','):
+                    # 剥掉可选/命名参数的 `{` `}`（`{required int b}` → `required int b`）
+                    seg = seg.strip().strip('{}[]').strip()
+                    ids = re.findall(r'([A-Za-z_]\w*)\s*$', seg)
+                    if ids:
+                        params.add(ids[-1])
+                if not params:
+                    continue
+                # 右侧必须**就是**参数名（后面直接是 `,` 或结尾），
+                # 否则 `x = y + 1` 这种真初始化会被误报
+                for am in re.finditer(r'([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*(?=,|$)',
+                                      init_txt):
+                    field, value = am.group(1), am.group(2)
+                    if field == value or value not in params:
+                        continue
+                    # 已经在用初始化形参（`this.x`）的不再报
+                    if re.search(r'\bthis\.%s\b' % re.escape(field), params_txt):
+                        continue
+                    lineno = text.count('\n', 0, code.find(body) + cm.start()) + 1
+                    findings.append(('HINT', 'C16', fp, lineno,
+                                     bi('%s.%s · lint prefer_initializing_formals：'
+                                        '构造器里 `%s = %s` 可用初始化形参 `this.%s` 代替'
+                                        '（需保证字段名与形参写法一致）'
+                                        % (name, field, field, value, field),
+                                        '%s.%s: lint prefer_initializing_formals — '
+                                        'use an initializing formal `this.%s` instead of '
+                                        '`%s = %s`' % (name, field, field, field, value))))
 
 
 def main():
@@ -1071,7 +1491,8 @@ def main():
     check_missing_imports(files, lib_dir, symbols, findings, pkg, part_map, export_map)
     check_lint_naming(files, findings)
     check_consumer_state_pair(files, findings)
-    check_datetime_date_member(files, findings)
+    check_member_exists(files, findings)
+    check_lint_table(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']

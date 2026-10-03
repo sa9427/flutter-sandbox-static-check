@@ -1,9 +1,9 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4 起 14 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.1 起 15 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 14 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 15 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
   **ConsumerState 与 widget 配对**。
@@ -27,7 +27,7 @@ description: >-
 
 WorkBuddy 沙箱无法运行 `flutter` / `dart`（Windows 子进程管道 `ERROR_PIPE_BUSY 231`），
 但改完 Dart 代码仍需验证不会引入编译期错误。本 skill 用**纯文本静态分析**替代 `flutter analyze`，
-对 Flutter 工程的 `lib/`（**v3 起默认一并体检 `test/`**）做十四板斧体检，
+对 Flutter 工程的 `lib/`（**v3 起默认一并体检 `test/`**）做十五板斧体检，
 覆盖那些最常见、最致命的编译期硬错与 lint 6 命名问题。
 The WorkBuddy sandbox cannot run `flutter` / `dart` (Windows subprocess pipe
 `ERROR_PIPE_BUSY 231`), yet edited Dart code still must be verified to avoid
@@ -61,12 +61,12 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 十四板斧检查项 / The Fourteen Checks
+## 十五板斧检查项 / The Fifteen Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
-> v3 起 12 项、v4 起 13 项、**v4.1 起 14 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v3 起 12 项、v4 起 13 项、**v4.1 起 15 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
-> 13 since v4, **14 since v4.1**. The name is kept so existing docs and project-memory
+> 13 since v4, **15 since v4.1**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -117,12 +117,22 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       Change **both** sides together: `class X extends ConsumerStatefulWidget` **and** `ConsumerState<X> createState() => _XState();`.
     - 降噪 / De-noising：**只在本文件内配对**（widget 与 State 通常同文件），跨文件 widget 跳过不猜 → 干净工程零误报。
       Pairs **within the same file only** (widget and State normally live together); cross-file widgets are skipped → zero false positives on a clean project.
-14. **DateTime 上的 `.date` 幽灵成员（ERROR）** / **`.date` on DateTime**: DateTime **没有** `date` getter；写成 `_now.subtract(...).date` 是 `undefined_getter` **编译硬错**（要"只要日期"应构造 `DateTime(y, m, d)`）。
-    DateTime has **no** `date` getter; `_now.subtract(...).date` is an `undefined_getter` **compile error** (build `DateTime(y, m, d)` to truncate).
-    - **v4 新增**，起因是 2026-10-04 fitcoach 实踩：`doms_test.dart` 4 处写了 `...subtract(...).date` → 整个测试文件 `Failed to load`（连带 4 条 error）。
-      **Added in v4** after a real miss: `doms_test.dart` wrote `...subtract(...).date` in 4 places → the whole test file failed to load (4 errors).
-    - 降噪两道 / Two de-noising filters：①**只认接收者可判定为 DateTime** 的写法（显式 `DateTime x = ...` 变量、`final x = DateTime...` 推断、`DateTime(...)` 字面构造、链式 `add/subtract/toLocal/toUtc`），`session.date` 这类对象字段不报；②**形参不算**（`DateTime d` 无初始化），否则同名 lambda 参数会被误伤（实测 `stats_service.dart` `(d) => ... d.date`）。
-      Only receivers provably DateTime (declared/inferred DateTime var, `DateTime(...)` literal, `add/subtract/toLocal/toUtc` chains); object fields like `session.date` are ignored; **parameters don't count** (`DateTime d` without initializer) — otherwise same-named lambda params get flagged.
+14. **成员存在性（ERROR，表驱动）** / **Member existence (table-driven)**: 接收者类型可判定时，访问的成员必须在成员集合里（`undefined_getter` 是**编译硬错**）。
+    When the receiver type is known, the accessed member must exist in that type's member set (`undefined_getter` is a **compile error**).
+    - **v4.1 泛化**（起因 M-006：原 C15 只认「DateTime + `.date`」一例）。设计原则：**机制是斧，符号是表** ——
+      以后遇到"某某类型上没有某某成员"，**往 `DART_TYPE_MEMBERS` / `DART_STATIC_MEMBERS` 加一行即可，不要再写一把斧**。
+      **Generalized in v4.1** (M-006: the old C15 only knew `DateTime` + `.date`). Principle: **the mechanism is the axe, the symbols are a table**.
+    - 类型判定（`_infer_type` / 变量声明）：显式 `Type x = ...`、`final x = <字面量/构造>` 推断、链式返回类型表 `DART_CHAIN_RETURN`、工程内 `class/mixin/extension` 成员扫描（含工程内继承链）。
+      Type resolution: declared types, literal/constructor inference, a chain-return table, and in-project `class/mixin/extension` member scanning (with in-project inheritance).
+    - 降噪四道（**零误报优先于覆盖率**）：①**形参不算**（跨函数同名会误判）②变量按**可见作用域**匹配（声明深度 ≤ 使用深度且未出作用域）③**静态访问**单看 `DART_STATIC_MEMBERS`（`DateTime.now()` 不是实例成员）④工程类继承链里有工程外类型 → 判 `opaque` 整体跳过。
+      Four de-noising filters (**zero false positives over coverage**): params don't count; variables are matched **within visible scope**; **static access** consults the static table; project classes with out-of-project supertypes are skipped as `opaque`.
+15. **lint 规则表（HINT，表驱动）** / **Lint rules (table-driven)**: `LINT_RULES` 表里每条通用 lint 规则是一项；新增 lint **加一项**即可。
+    Each generic lint rule is one entry in `LINT_RULES`; adding a lint means **adding one entry**.
+    - **v4.1 新增**（起因 M-007：宿主 `analyze` 报 `prefer_initializing_formals`，C12 只覆盖工程特有两条，抓不到）。
+      **Added in v4.1** (M-007: the host reported `prefer_initializing_formals`; C12 only covered two project-specific rules).
+    - 首批规则 / First rule：`prefer_initializing_formals`（构造器里 `field = param` 应改用初始化形参 `this.field`）。
+      降噪：右侧必须**就是**参数名（`x = y + 1` 不算）；已用 `this.x` 的不报。
+    - 与 C12 分工：C12 = 工程特有（连续下划线 / 私有命名）；C16 = 通用 lint。
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 
@@ -147,14 +157,19 @@ Never just fix the business code — otherwise the same class of bug keeps escap
 Full workflow and the ledger live in **`MISSES.md`** (single source of truth for
 escapes, with a minimal repro per entry).
 
-六步闭环 / Six-step loop：
+七步闭环 / Seven-step loop：
 1. **确认是漏报**——九板斧复跑该文件（默认已含 `test/`），确认零告警。
 2. **归类**——检查项**缺失**（新增一斧）／被**降噪滤掉**（收紧过滤）／**口径不对**（修正逻辑）。
-3. **补/改** `check.py`，同步 `SKILL.md` / `README.md` 的清单与计数。
-4. **反向验证（强制）**——把问题代码临时改回原样 → 跑九板斧 → 确认新斧命中 →
+3. **⚠️ 先问"能不能泛化"（2026-10-04 新增，防止"发现一例累加一例"）**——
+   这一例是**某个通用机制的一个数据点**，还是**真需要一把新斧**？
+   判断标准：**斧里会不会写死具体符号名**。会写死 → 说明缺的是一张**表**，
+   应把机制抽成斧、把符号放进表（如 C15 成员存在性 / C16 lint 规则表）。
+   **只改业务代码不补斧 = 同类问题必复发；补了斧但只是累加个例 = 工具越长越臃肿。**
+4. **补/改** `check.py`，同步 `SKILL.md` / `README.md` 的清单与计数。
+5. **反向验证（强制）**——把问题代码临时改回原样 → 跑九板斧 → 确认新斧命中 →
    **还原** → `git status` 为空 + 复跑干净。**没做这步等于没验证。**
-5. **登记 `MISSES.md`**——务必写清最小复现。
-6. **commit**（默认只 commit 不 push）。
+6. **登记 `MISSES.md`**——务必写清最小复现。
+7. **commit**（默认只 commit 不 push）。
 
 ⚠️ **改动过滤/降噪规则时，必须回看 `MISSES.md` 并重跑相关复现**：
 降噪改宽是「已闭环漏报悄悄复发」的头号原因。
