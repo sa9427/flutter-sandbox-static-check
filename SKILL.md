@@ -1,14 +1,17 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v3 起 12 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，对 lib/ 做 10 项编译期硬错检查：断 import、pubspec 依赖一致性、相对导入残留、
-  枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、字符串型枚举残留、未用依赖。
-  Flutter/Dart static checker that runs without the Dart SDK: 10 compile-time
-  checks (broken imports, dependency consistency, relative-import leftovers, enum
-  value existence, asset references, named-arg spelling, unused imports incl.
-  dart: core libs, bracket balance, string-enum residue, unused deps).
+  flutter analyze，做 12 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
+  字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**。
+  Flutter/Dart static checker that runs without the Dart SDK: 12 checks
+  (test/ included by default) — broken imports, dependency consistency,
+  relative-import leftovers, enum value existence, asset references, named-arg
+  spelling, unused imports (incl. dart: core libs), bracket balance,
+  string-enum residue, unused deps, **used-but-not-imported symbols**,
+  **lint 6 naming & underscores**.
 ---
 
 # Flutter 沙箱静态体检（九板斧）
@@ -18,12 +21,14 @@ description: >-
 
 WorkBuddy 沙箱无法运行 `flutter` / `dart`（Windows 子进程管道 `ERROR_PIPE_BUSY 231`），
 但改完 Dart 代码仍需验证不会引入编译期错误。本 skill 用**纯文本静态分析**替代 `flutter analyze`，
-对 Flutter 工程的 `lib/` 目录做十板斧体检，覆盖那些最常见、最致命的编译期硬错。
+对 Flutter 工程的 `lib/`（**v3 起默认一并体检 `test/`**）做十二板斧体检，
+覆盖那些最常见、最致命的编译期硬错与 lint 6 命名问题。
 The WorkBuddy sandbox cannot run `flutter` / `dart` (Windows subprocess pipe
 `ERROR_PIPE_BUSY 231`), yet edited Dart code still must be verified to avoid
 compile-time errors. This skill replaces `flutter analyze` with **pure-text
-static analysis**, running ten checks over the project's `lib/` directory to
-catch the most common and most fatal compile errors.
+static analysis**, running twelve checks over the project's `lib/`
+(**and `test/` by default since v3**) to catch the most common and most fatal
+compile errors plus lint 6 naming issues.
 
 ## 运行方式 / How to Run
 
@@ -32,6 +37,8 @@ The bundled script has **zero third-party dependencies** (pure Python stdlib):
 
 ```bash
 python3 <skill_dir>/check.py --project C:/code/fitcoach
+# v3 起 **默认连 test/ 一起体检**；只想扫 lib/ 时加 --no-test
+# Since v3, test/ is scanned **by default**; pass --no-test for lib/ only
 ```
 
 - 默认 `--project` 为 `C:/code/fitcoach`；也可指向任意 Flutter 工程根目录
@@ -48,7 +55,12 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 十板斧检查项 / The Ten Checks
+## 十二板斧检查项 / The Twelve Checks
+
+> **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
+> v3 起 12 项。名字保留，避免打断既有文档与项目记忆里的引用。
+> The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3.
+> The name is kept so existing docs and project-memory references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
    Resolves `package:fitcoach/...` and confirms the target `.dart` file exists.
@@ -79,6 +91,17 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
    Checks whether an enum is mistakenly used as a bare string.
 10. **未用依赖（HINT）** / **Unused dependency**: `pubspec` 声明的运行时依赖若无任何文件 `import`，提示可能未使用（**v2 新增，借鉴 flutter_analyzer_script**）。
     A runtime dependency declared in `pubspec` that no file imports may be unused (**added in v2, inspired by flutter_analyzer_script**).
+11. **符号用到但没 import（ERROR）** / **Used-but-not-imported symbol**: 文件里用了某符号却没 import 定义它的文件——**Dart 的 import 不传递**，A import B、B import C 时 A 拿不到 C 的符号。
+    A file uses a symbol without importing the file that defines it — **Dart imports are not transitive**: if A imports B and B imports C, A does not get C's symbols.
+    - **v3 新增**，起因是 2026-10-03 fitcoach 实踩：`plateau_test.dart` 用了 `VolumeTrendPoint` 却只 import 了「同样用到它的」`plateau_service.dart`，宿主 `flutter analyze` 一次报 4 个 error，而旧的 C1 只判「import 的文件是否存在」，对「压根少写一条 import」完全无感。
+      **Added in v3** after a real miss: `plateau_test.dart` used `VolumeTrendPoint` but only imported `plateau_service.dart` (which itself uses it); `flutter analyze` reported 4 errors, while the old C1 only checked whether an imported file exists.
+    - 降噪三道 / Three de-noising filters：`part`/`export` 传递闭包（可见符号 ≠ 定义文件）、前置 `.`（成员/枚举访问）、后置 `:`（命名实参）；再排除本文件内的声明位置（含 `this.x`、`Type name` 形参、增强枚举成员）。
+      `part`/`export` transitive closure (visible ≠ defining file), leading `.` (member/enum access), trailing `:` (named arg); plus declarations inside the file itself (`this.x`, `Type name` params, enhanced-enum members).
+12. **lint 6 命名与下划线（HINT）** / **lint 6 naming & underscores**:
+    - 标识符含**连续下划线**（`__` / `___`）→ `unnecessary_underscores`。未用参数应写 N 个**单** `_`（`(_, _)`），不能省参数个数（会 `argument_type_not_assignable`）。
+      Consecutive underscores (`__` / `___`) → `unnecessary_underscores`. Use N **single** `_` for unused params (`(_, _)`); do not drop params (causes `argument_type_not_assignable`).
+    - 顶层**私有函数/变量**写成 `_UpperCamel` → `non_constant_identifier_names`。⚠️ 私有**类** `_Foo` 是合法的（类走 UpperCamelCase），已排除。
+      Private top-level **functions/variables** written as `_UpperCamel` → `non_constant_identifier_names`. ⚠️ Private **classes** `_Foo` are legal and are excluded.
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 

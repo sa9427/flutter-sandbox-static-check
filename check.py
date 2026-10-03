@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Flutter 沙箱静态体检（九板斧）—— 纯标准库，无第三方依赖。
+Flutter 沙箱静态体检（九板斧 / v3 起 12 项）—— 纯标准库，无第三方依赖。
 
-对 Flutter 工程的 lib/ 做文本静态检查，替代无法运行的 flutter analyze。
+对 Flutter 工程的 lib/（v3 起默认含 test/）做文本静态检查，替代无法运行的 flutter analyze。
 用法：
     python3 check.py --project C:/code/fitcoach
+    python3 check.py --no-test        # 只扫 lib/
 
 设计借鉴（开源精华）：
 - dart-re-analyzer / pedant：severity 分级 + 跳过生成文件（*.g.dart / *.freezed.dart 等）。
@@ -723,14 +724,235 @@ def check_unused_deps(files, runtime_deps, findings):
 project_root_ref = '.'
 
 
+def _spec_to_rel(spec, base):
+    """把 import/export 的 spec 转成相对 lib_dir 的路径；非本工程包返回 None。"""
+    if spec.startswith('package:'):
+        rest = spec[len('package:'):]
+        if '/' in rest:
+            return rest.split('/', 1)[1]
+        return None
+    return os.path.normpath(os.path.join(base, spec)).replace('\\', '/')
+
+
+def collect_part_export(lib_dir):
+    """返回 (part_map, export_map)：文件(rel) -> 其 part/export 的目标文件(rel)。
+
+    - `part 'x.dart'`   ：x 的顶层声明**并入本文件**命名空间（import 本文件即可见 x 的符号）。
+    - `export 'x.dart'` ：x 的符号被本文件再导出（import 本文件即可见 x 的符号）。
+
+    二者都会让「符号在哪可见」≠「符号定义在哪」，C11 判定前必须先展开成闭包。
+    """
+    part_map, export_map = {}, {}
+    for root, _, files in os.walk(lib_dir):
+        for f in files:
+            fp = os.path.join(root, f)
+            if not f.endswith('.dart') or EXCLUDE_RE.search(fp):
+                continue
+            rel = os.path.relpath(fp, lib_dir).replace('\\', '/')
+            base = os.path.dirname(rel)
+            text = read(fp)
+            parts = [os.path.normpath(os.path.join(base, m.group(1))).replace('\\', '/')
+                     for m in re.finditer(r"^\s*part\s+'([^']+)'", text, re.M)]
+            exports = []
+            for m in re.finditer(r"^\s*export\s+'([^']+)'", text, re.M):
+                t = _spec_to_rel(m.group(1), base)
+                if t:
+                    exports.append(t)
+            part_map[rel] = parts
+            export_map[rel] = exports
+    return part_map, export_map
+
+
+def _visible_files(seeds, part_map, export_map):
+    """从 seeds 出发 BFS 展开 part/export 传递闭包，得到「可见文件」集合。"""
+    seen, stack = set(), list(seeds)
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        for nxt in part_map.get(cur, []):
+            if nxt not in seen:
+                stack.append(nxt)
+        for nxt in export_map.get(cur, []):
+            if nxt not in seen:
+                stack.append(nxt)
+    return seen
+
+
+def _local_declared_names(text):
+    """本文件自己声明的标识符（含私有 `_x`）——用到它们不算「没 import」。
+
+    只取顶层会漏掉三类高频声明，都会造成 C11 误报（2026-10-03 实踩）：
+    - 参数/字段声明 `List<double> recentPeakRpe`（`planDeload` 的形参，不是调用）
+    - 构造参数 `this.phase`
+    - 增强枚举成员 `enum CardioPhase { main('主体') }` 里的 `main`
+    """
+    code = mask_strings_comments(text)
+    names = set()
+    for raw in text.split('\n'):
+        line = raw.rstrip()
+        if not line or line[0].isspace():
+            continue
+        m = re.match(
+            r'(?:abstract\s+|base\s+|final\s+|sealed\s+|interface\s+|mixin\s+)*'
+            r'(?:class|enum|mixin|typedef|extension)\s+([A-Za-z_]\w*)', line)
+        if m:
+            names.add(m.group(1))
+            continue
+        m = re.match(r'(?:external\s+)?[A-Za-z_][\w<>,\s\[\]?]*?\s+([a-zA-Z_]\w*)\s*\(', line)
+        if m:
+            names.add(m.group(1))
+            continue
+        m = re.match(r'(?:late\s+|final\s+|const\s+|var\s+)?[\w<>,\s\[\]?]*?\s*'
+                     r'([A-Za-z_]\w*)\s*=', line)
+        if m:
+            names.add(m.group(1))
+
+    # 构造参数 this.x
+    for m in re.finditer(r'\bthis\.([A-Za-z_]\w*)', code):
+        names.add(m.group(1))
+    # 局部变量 / 字段 / 形参声明：`Type name`（含 required/final/var 前缀）
+    for m in re.finditer(
+            r'\b(?:required\s+|final\s+|var\s+|const\s+|late\s+)*'
+            r'(?:[A-Z]\w*(?:<[^(){};]*>)?|int|double|num|bool|String|dynamic|void)'
+            r'\s+([a-z_]\w*)\b', code):
+        names.add(m.group(1))
+    # 增强枚举成员声明（花括号配对取出 enum 体，避免把成员当外部调用）
+    for em in re.finditer(r'\benum\s+[A-Za-z_]\w*[^{]*\{', code):
+        depth, i = 1, em.end()
+        while i < len(code) and depth:
+            if code[i] == '{':
+                depth += 1
+            elif code[i] == '}':
+                depth -= 1
+            i += 1
+        for part in code[em.end():i - 1].split(','):
+            pm = re.match(r'\s*([A-Za-z_]\w*)', part)
+            if pm:
+                names.add(pm.group(1))
+    return names
+
+
+# ── 检查 11：符号用到但没 import（ERROR，v3 新增）─────────────────────
+# 背景（2026-10-03 fitcoach 实踩）：plateau_test.dart 用了 VolumeTrendPoint，
+# 却只 import 了「同样用到它的」plateau_service.dart —— **Dart 的 import 不传递**，
+# 被测文件 import 过的库不会带给调用方。宿主 flutter analyze 一次报 4 个 error，
+# 而 C1 只判「import 的文件是否存在」，对「压根少写一条 import」完全无感。
+def check_missing_imports(files, lib_dir, symbols, findings, pkg,
+                          part_map, export_map):
+    self_prefix = 'package:%s/' % pkg
+    # 符号 -> 定义它的文件；**只保留唯一定义**的，同名多定义直接放弃以免误报。
+    sym2files = {}
+    for rel, names in symbols.items():
+        for n in names:
+            sym2files.setdefault(n, set()).add(rel)
+    sym2file = {n: next(iter(fs)) for n, fs in sym2files.items() if len(fs) == 1}
+
+    for fp in files:
+        text = read(fp)
+        # part 文件共享主库命名空间，无法独立判定其可见符号
+        if re.search(r'^\s*part\s+of\s+', text, re.M):
+            continue
+        code = mask_strings_comments(text)
+        imported = set()
+        for m in re.finditer(r"^\s*import\s+'([^']+)'", text, re.M):
+            spec = m.group(1)
+            if spec.startswith(self_prefix):
+                imported.add(os.path.normpath(spec[len(self_prefix):]).replace('\\', '/'))
+        visible = _visible_files(imported, part_map, export_map)
+
+        rel_self = None
+        r = os.path.relpath(fp, lib_dir).replace('\\', '/')
+        if not r.startswith('..'):
+            rel_self = r
+        if rel_self:
+            visible |= _visible_files({rel_self}, part_map, export_map)
+
+        local = _local_declared_names(text)
+        reported = set()
+        for m in re.finditer(r'\b([A-Za-z_]\w*)\b', code):
+            name = m.group(1)
+            if name in reported or name in local:
+                continue
+            # 前置字符（跳过空白）：`.` → 成员/枚举访问（CardioPhase.main、
+            # StatsService.dateKey），走的是已 import 符号的成员，无需再 import
+            j = m.start() - 1
+            while j >= 0 and code[j] in ' \t\r\n':
+                j -= 1
+            prev = code[j] if j >= 0 else ''
+            if prev == '.':
+                continue
+            # 后置字符（跳过空白）：`:` → 命名实参（recentPeakRpe: x / dateKey: d）
+            # 例外：`a ? b : c` 三元里的 b 后面也跟 `:`，但前面是 `?`，不能误滤
+            k = m.end()
+            while k < len(code) and code[k] in ' \t\r\n':
+                k += 1
+            nxt = code[k] if k < len(code) else ''
+            if nxt == ':' and code[k:k + 2] != '::' and prev != '?':
+                continue
+            defrel = sym2file.get(name)
+            if not defrel or defrel in visible:
+                continue
+            reported.add(name)
+            lineno = text.count('\n', 0, m.start()) + 1
+            findings.append(('ERROR', 'C11', fp, lineno,
+                             bi('符号 %s 定义在 %s，但本文件未 import 它（Dart import 不传递）'
+                                % (name, defrel),
+                                'symbol %s is defined in %s but this file does not import it '
+                                '(Dart imports are not transitive)' % (name, defrel))))
+
+
+# ── 检查 12：lint 6 命名 / 下划线（HINT，v3 新增）─────────────────────
+# 2026-10-03 fitcoach 宿主 analyze 报的 3 条 info 全属此类，九板斧此前一条不查。
+def check_lint_naming(files, findings):
+    for fp in files:
+        text = read(fp)
+        code = mask_strings_comments(text)
+        # 1) unnecessary_underscores：标识符里出现连续两个及以上下划线
+        #    （未用参数要写 N 个单 `_`，不能写 `__`/`___`）
+        seen = set()
+        for m in re.finditer(r'\b([A-Za-z_]\w*)\b', code):
+            name = m.group(1)
+            if '__' not in name or name in seen:
+                continue
+            seen.add(name)
+            lineno = text.count('\n', 0, m.start()) + 1
+            findings.append(('HINT', 'C12', fp, lineno,
+                             bi('标识符 %s 含连续下划线（lint6 unnecessary_underscores，'
+                                '未用参数应写多个单 _）' % name,
+                                'identifier %s has consecutive underscores '
+                                '(lint6 unnecessary_underscores)' % name)))
+        # 2) non_constant_identifier_names：顶层私有函数/变量写成 `_UpperCamel`
+        #    ⚠️ 私有**类** `_Foo` 是合法的（类走 UpperCamelCase），必须排除。
+        for i, raw in enumerate(text.split('\n')):
+            line = raw.rstrip()
+            if not line or line[0].isspace():
+                continue
+            if re.match(r'(?:abstract\s+|base\s+|final\s+|sealed\s+|interface\s+|mixin\s+)*'
+                        r'(?:class|enum|mixin|typedef|extension)\s+_[A-Z]', line):
+                continue
+            m = re.match(r'(?:external\s+)?[A-Za-z_][\w<>,\s\[\]?]*?\s+(_[A-Z]\w*)\s*\(', line)
+            if not m:
+                m = re.match(r'(?:late\s+|final\s+|const\s+|var\s+)?[\w<>,\s\[\]?]*?\s*'
+                             r'(_[A-Z]\w*)\s*=', line)
+            if m:
+                findings.append(('HINT', 'C12', fp, i + 1,
+                                 bi('私有声明 %s 应为 lowerCamelCase（lint6 '
+                                    'non_constant_identifier_names）' % m.group(1),
+                                    'private declaration %s should be lowerCamelCase '
+                                    '(lint6 non_constant_identifier_names)' % m.group(1))))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
     ap.add_argument('--project', default='C:/code/fitcoach')
-    ap.add_argument('--with-test', action='store_true',
-                    help='also scan <project>/test (test code needs checking too) / '
-                         '同时体检 test/ 目录')
+    ap.add_argument('--no-test', action='store_true',
+                    help='skip <project>/test (it is scanned by default since v3) / '
+                         '跳过 test/ 目录（v3 起默认体检 test/）')
     args = ap.parse_args()
+    with_test = not args.no_test
 
     project = os.path.abspath(args.project)
     project_root_ref = project
@@ -741,9 +963,10 @@ def main():
         sys.exit(2)
 
     files = find_dart_files(lib_dir)
-    # 测试代码也是交付物：开启后一并体检（import 仍按 lib_dir 解析，符合
-    # package: 导入语义；此前只能扫 lib/，test/ 下的断 import 完全查不到）。
-    if args.with_test and os.path.isdir(os.path.join(project, 'test')):
+    # 测试代码也是交付物：**v3 起默认一并体检**（import 仍按 lib_dir 解析，符合
+    # package: 导入语义）。此前默认只扫 lib/，test/ 下的断 import 完全查不到；
+    # 更致命的是「少写一条 import」连 --with-test 也抓不到（见 C11）。
+    if with_test and os.path.isdir(os.path.join(project, 'test')):
         files = files + find_dart_files(os.path.join(project, 'test'))
     print(bi('扫描 %d 个 dart 文件（%s）' % (len(files), lib_dir),
              'Scanned %d dart files (%s)' % (len(files), lib_dir)))
@@ -756,9 +979,10 @@ def main():
     named_params = collect_named_params(lib_dir)
     # test/ 里也有本地函数签名（如测试里的 payload({List<X>? cardioList})），
     # 只扫 lib/ 会把这些调用全报成"拼写错误"（2026-10-01 修）。
-    if args.with_test and os.path.isdir(os.path.join(project, 'test')):
+    if with_test and os.path.isdir(os.path.join(project, 'test')):
         named_params |= collect_named_params(os.path.join(project, 'test'))
     symbols, ext_members = collect_file_symbols(lib_dir)
+    part_map, export_map = collect_part_export(lib_dir)
     pkg = read_pubspec_name(project)
 
     check_imports(files, lib_dir, project, findings, pkg)
@@ -770,6 +994,8 @@ def main():
     check_brackets(files, findings)
     check_string_enum(files, findings)
     check_unused_deps(files, runtime_deps, findings)
+    check_missing_imports(files, lib_dir, symbols, findings, pkg, part_map, export_map)
+    check_lint_naming(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']
