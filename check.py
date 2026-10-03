@@ -979,6 +979,45 @@ def check_consumer_state_pair(files, findings):
                                     % (m.group(1), base, target, target, want))))
 
 
+def check_datetime_date_member(files, findings):
+    """C15 · DateTime 上取 `.date`（DateTime 无此成员 → undefined_getter 编译硬错）。
+
+    典型笔误：想把 DateTime 截断成"日期"，写成 `_now.subtract(...).date`。
+    DateTime 只有 year / month / day / hour…，取日期应构造 `DateTime(y, m, d)`。
+    只在**接收者可判定为 DateTime** 时报错（显式声明 DateTime / 推断为 DateTime /
+    `DateTime(...)` 字面构造 / 链式 add·subtract·toLocal·toUtc），
+    以免把 `session.date`、`widget.date` 这类**对象字段**误报。
+    """
+    # 只认**有初始化的 DateTime 变量**（`DateTime x = ...`）。
+    # 形参（`DateTime d`）不认：同名标识符在不同函数里可能是别的类型，
+    # 会误报（实测 fitcoach `stats_service.dart` 的 `(d) => ... d.date` 就被误伤）。
+    var_re = re.compile(r'\bDateTime\s+(\w+)\s*=')
+    infer_re = re.compile(r'\b(?:final|var|late)\s+(?:final\s+)?(\w+)\s*=\s*DateTime\b')
+    # 参数允许一层嵌套（`const Duration(hours: 20)` 这类），否则链式调用匹配不到
+    arg = r'\([^()]*(?:\([^()]*\)[^()]*)*\)'
+    recv = (r'(?:DateTime\s*%s|DateTime\.\w+\s*%s|\b\w+\b)'
+            r'(?:\s*\.\s*(?:toLocal|toUtc|add|subtract)\s*%s)*' % (arg, arg, arg))
+    use_re = re.compile(r'(%s)\s*\.\s*date\b' % recv)
+    for fp in files:
+        text = read(fp)
+        code = mask_strings_comments(text)
+        dt_vars = set(var_re.findall(code)) | set(infer_re.findall(code))
+        if not dt_vars and 'DateTime' not in code:
+            continue
+        for m in use_re.finditer(code):
+            receiver = m.group(1)
+            root = re.match(r'\w+', receiver).group(0)
+            if receiver.startswith('DateTime') or root in dt_vars:
+                lineno = text.count('\n', 0, m.start()) + 1
+                findings.append(('ERROR', 'C15', fp, lineno,
+                                 bi('DateTime 上没有 `.date` 成员（undefined_getter 编译硬错）；'
+                                    '要「只要日期」请构造 DateTime(y, m, d)，'
+                                    '疑似笔误：`%s.date`' % receiver,
+                                    'DateTime has no `.date` getter (undefined_getter, '
+                                    'compile error); to truncate to a date build '
+                                    'DateTime(y, m, d). Suspect typo: `%s.date`' % receiver)))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -1032,6 +1071,7 @@ def main():
     check_missing_imports(files, lib_dir, symbols, findings, pkg, part_map, export_map)
     check_lint_naming(files, findings)
     check_consumer_state_pair(files, findings)
+    check_datetime_date_member(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']

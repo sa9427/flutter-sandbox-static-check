@@ -143,6 +143,32 @@
 
 ---
 
+### M-006 · 2026-10-04 · fitcoach(E8/C31) · `DateTime` 上取 `.date` → **新增 C15**
+
+- **症状**：宿主 `flutter test` 报 `Failed to load "test/services/doms_test.dart"` + 4 条
+  `Error: The getter 'date' isn't defined for the type 'DateTime'`（`doms_test.dart:25/26/27/29`），
+  `flutter analyze` 同步报 4 条 `undefined_getter`。
+- **根因**：想把 DateTime 截断成日期时写成了 `_now.subtract(const Duration(hours: 20)).date`。
+  `DateTime` 只有 `year/month/day/hour…`，**没有 `date` getter**；要"只要日期"应构造
+  `DateTime(y, m, d)`（工程内已有 `StatsService.dayStart` 这类工具）。
+- **旧九板斧为何漏**：C11 只查「符号用到但没 import」，对**成员名在已解析类型上不存在**
+  这类 `undefined_getter` 完全无感——它假定所有前置 `.` 的访问都是合法成员访问
+  （那条降噪规则本就是为了不误报 `session.date`）。
+- **补的斧**：新增 **C15（DateTime 上的 `.date` 幽灵成员，ERROR 级）**，
+  只在**接收者可判定为 DateTime** 时命中：显式 `DateTime x = ...` 变量 / `final x = DateTime...`
+  推断 / `DateTime(...)` 字面构造 / 链式 `add·subtract·toLocal·toUtc`。
+- **最小复现**：`/tmp/c15check/lib/a.dart` 含 4 处真错（`_now.subtract(...).date`、
+  `DateTime.now().date`、`_now.date`、`inferred.date`）+ 3 处反例
+  （对象字段 `session.date`、注释里的 `_now.date`、字符串 `'x.date'`）
+  → 期望**只报那 4 处**（实测 4/4 命中、反例零误报）。
+- **降噪坑（实测）**：第一版把**形参** `DateTime d` 也当 DateTime 变量，
+  导致 `stats_service.dart:124` 的 `(d) => ... d.date`（`d` 是聚合对象）被误报 →
+  改为**只认有初始化的变量**（`DateTime x = ...`），形参一律不算。
+- **反向验证**：fitcoach 修复后复跑 → **C15 零告警**（仅剩 4 条已知 C6 HINT）。
+- **状态**：✅ 已补斧并反向验证通过（2026-10-04）。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown

@@ -1,9 +1,9 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4 起 13 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4 起 14 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 13 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 14 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
   **ConsumerState 与 widget 配对**。
@@ -27,7 +27,7 @@ description: >-
 
 WorkBuddy 沙箱无法运行 `flutter` / `dart`（Windows 子进程管道 `ERROR_PIPE_BUSY 231`），
 但改完 Dart 代码仍需验证不会引入编译期错误。本 skill 用**纯文本静态分析**替代 `flutter analyze`，
-对 Flutter 工程的 `lib/`（**v3 起默认一并体检 `test/`**）做十三板斧体检，
+对 Flutter 工程的 `lib/`（**v3 起默认一并体检 `test/`**）做十四板斧体检，
 覆盖那些最常见、最致命的编译期硬错与 lint 6 命名问题。
 The WorkBuddy sandbox cannot run `flutter` / `dart` (Windows subprocess pipe
 `ERROR_PIPE_BUSY 231`), yet edited Dart code still must be verified to avoid
@@ -61,12 +61,12 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 十三板斧检查项 / The Thirteen Checks
+## 十四板斧检查项 / The Fourteen Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
-> v3 起 12 项、**v4 起 13 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v3 起 12 项、v4 起 13 项、**v4.1 起 14 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
-> **13 since v4**. The name is kept so existing docs and project-memory
+> 13 since v4, **14 since v4.1**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -117,6 +117,12 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       Change **both** sides together: `class X extends ConsumerStatefulWidget` **and** `ConsumerState<X> createState() => _XState();`.
     - 降噪 / De-noising：**只在本文件内配对**（widget 与 State 通常同文件），跨文件 widget 跳过不猜 → 干净工程零误报。
       Pairs **within the same file only** (widget and State normally live together); cross-file widgets are skipped → zero false positives on a clean project.
+14. **DateTime 上的 `.date` 幽灵成员（ERROR）** / **`.date` on DateTime**: DateTime **没有** `date` getter；写成 `_now.subtract(...).date` 是 `undefined_getter` **编译硬错**（要"只要日期"应构造 `DateTime(y, m, d)`）。
+    DateTime has **no** `date` getter; `_now.subtract(...).date` is an `undefined_getter` **compile error** (build `DateTime(y, m, d)` to truncate).
+    - **v4 新增**，起因是 2026-10-04 fitcoach 实踩：`doms_test.dart` 4 处写了 `...subtract(...).date` → 整个测试文件 `Failed to load`（连带 4 条 error）。
+      **Added in v4** after a real miss: `doms_test.dart` wrote `...subtract(...).date` in 4 places → the whole test file failed to load (4 errors).
+    - 降噪两道 / Two de-noising filters：①**只认接收者可判定为 DateTime** 的写法（显式 `DateTime x = ...` 变量、`final x = DateTime...` 推断、`DateTime(...)` 字面构造、链式 `add/subtract/toLocal/toUtc`），`session.date` 这类对象字段不报；②**形参不算**（`DateTime d` 无初始化），否则同名 lambda 参数会被误伤（实测 `stats_service.dart` `(d) => ... d.date`）。
+      Only receivers provably DateTime (declared/inferred DateTime var, `DateTime(...)` literal, `add/subtract/toLocal/toUtc` chains); object fields like `session.date` are ignored; **parameters don't count** (`DateTime d` without initializer) — otherwise same-named lambda params get flagged.
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 
