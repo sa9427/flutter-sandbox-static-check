@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Flutter 沙箱静态体检（九板斧 / v4 起 13 项）—— 纯标准库，无第三方依赖。
+Flutter 沙箱静态体检（九板斧 / v4.2 起 16 项）—— 纯标准库，无第三方依赖。
 
 对 Flutter 工程的 lib/（v3 起默认含 test/）做文本静态检查，替代无法运行的 flutter analyze。
 用法：
@@ -1399,6 +1399,45 @@ LINT_RULES = {
         '（暂不开：`this.` 在工程里有可读性用途，开了噪音大于收益）'),
 }
 
+# ── 第三方 API 废弃 / 迁移名单（C17 表驱动）─────────────────────────────
+# 由来（2026-10-04 宿主 `flutter analyze` 报 `lib/providers/providers.dart:216
+# Method not found: 'StateProvider'`）：**major 升级后第三方符号被挪走或删掉**，
+# 这类错 C11「符号用到没 import」抓不到 —— 它比对的是**工程内声明**的符号，
+# 第三方包挪走导出后，符号既不在工程内、也不在 import 列表里，形成盲区。
+#
+# 每条 = (标识符, 豁免 import 片段, 中文提示, 英文提示)
+#   - 豁免 import 非空：文件 import 了该库 → 放行（说明开发者是显式引 legacy）
+#   - 豁免 import 为空：无论怎么 import 都报（API 已被整个移除）
+# 匹配在 `mask_strings_comments` 之后进行 → 注释 / 字符串里提及不算数。
+DEPRECATED_API_RULES = [
+    ('StateProvider', 'flutter_riverpod/legacy.dart',
+     'Riverpod 3 起 StateProvider 已移入 package:flutter_riverpod/legacy.dart，'
+     '主入口不再导出（直接用会 Method not found）；改用 NotifierProvider + Notifier',
+     'Since Riverpod 3, StateProvider moved to package:flutter_riverpod/legacy.dart; '
+     'use NotifierProvider + Notifier instead'),
+    ('StateProviderFamily', 'flutter_riverpod/legacy.dart',
+     'Riverpod 3 起 StateProviderFamily 已移入 legacy，改用 NotifierProvider.family',
+     'Since Riverpod 3, StateProviderFamily moved to legacy; use NotifierProvider.family'),
+    ('StateNotifier', 'flutter_riverpod/legacy.dart',
+     'Riverpod 3 起 StateNotifier 已移入 legacy，改用 Notifier',
+     'Since Riverpod 3, StateNotifier moved to legacy; use Notifier'),
+    ('StateController', 'flutter_riverpod/legacy.dart',
+     'Riverpod 3 起 StateController 已移入 legacy，改用 Notifier 的 state',
+     'Since Riverpod 3, StateController moved to legacy; use Notifier.state'),
+    ('StateNotifierProvider', 'flutter_riverpod/legacy.dart',
+     'Riverpod 3 起 StateNotifierProvider 已移入 legacy，改用 NotifierProvider',
+     'Since Riverpod 3, StateNotifierProvider moved to legacy; use NotifierProvider'),
+    ('StateNotifierProviderFamily', 'flutter_riverpod/legacy.dart',
+     'Riverpod 3 起 StateNotifierProviderFamily 已移入 legacy，改用 NotifierProvider.family',
+     'Since Riverpod 3, StateNotifierProviderFamily moved to legacy; '
+     'use NotifierProvider.family'),
+    ('ChangeNotifierProvider', '',
+     'Riverpod 3 已**移除** ChangeNotifierProvider（legacy 也不再导出），'
+     '改用 NotifierProvider + Notifier',
+     'ChangeNotifierProvider was removed in Riverpod 3 (not even in legacy); '
+     'use NotifierProvider + Notifier'),
+]
+
 _CTOR_RE_TMPL = r'\b(?:const\s+|factory\s+)?%s\s*\(([^()]*)\)\s*(?::\s*([^{;]+?))?\s*(?:\{|=>|;)'
 
 
@@ -1445,6 +1484,35 @@ def check_lint_table(files, findings):
                                         '%s.%s: lint prefer_initializing_formals — '
                                         'use an initializing formal `this.%s` instead of '
                                         '`%s = %s`' % (name, field, field, field, value))))
+
+
+def check_deprecated_api(files, findings):
+    """C17 · 第三方 API 废弃/迁移名单（表驱动，见 DEPRECATED_API_RULES）。
+
+    为什么需要这一斧：major 升级后**第三方符号被挪走或删掉**时，
+    C11（符号用到没 import）抓不到 —— 它比对的是工程内声明的符号，
+    而这类符号既不在工程内、也不在 import 列表里。宿主 `flutter analyze`
+    会报 `Method not found` / `undefined_function`，沙箱里此前只能靠人眼。
+    """
+    for fp in files:
+        text = read(fp)
+        code = mask_strings_comments(text)
+        # 只看本文件的 import 行（含 as/show 前缀部分）
+        imports = '\n'.join(re.findall(r"""^\s*import\s+['"]([^'"]+)['"]""",
+                                       text, re.M))
+        for ident, escape_import, zh, en in DEPRECATED_API_RULES:
+            if escape_import and escape_import in imports:
+                continue
+            hit = re.search(r'\b%s\b' % re.escape(ident), code)
+            if not hit:
+                continue
+            lineno = text.count('\n', 0, hit.start()) + 1
+            # 每个标识符每文件只报一次（同一处用法重复出现没必要刷屏）
+            findings.append(('ERROR', 'C17', fp, lineno,
+                             bi('第三方 API 已废弃/迁移：`%s` —— %s'
+                                % (ident, zh),
+                                'Deprecated/moved third-party API: `%s` — %s'
+                                % (ident, en))))
 
 
 def main():
@@ -1502,6 +1570,7 @@ def main():
     check_consumer_state_pair(files, findings)
     check_member_exists(files, findings)
     check_lint_table(files, findings)
+    check_deprecated_api(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']

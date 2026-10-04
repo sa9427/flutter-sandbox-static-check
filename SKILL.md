@@ -1,12 +1,13 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.1 起 15 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.2 起 16 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 15 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 16 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
-  **ConsumerState 与 widget 配对**。
+  **ConsumerState 与 widget 配对**、**成员存在性**、**lint 规则表**、
+  **第三方 API 废弃/迁移（如 Riverpod 3 的 StateProvider）**。
   Flutter/Dart static checker that runs without the Dart SDK: 13 checks
   (test/ included by default) — broken imports, dependency consistency,
   relative-import leftovers, enum value existence, asset references, named-arg
@@ -61,12 +62,12 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 十五板斧检查项 / The Fifteen Checks
+## 十六板斧检查项 / The Sixteen Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
-> v3 起 12 项、v4 起 13 项、**v4.1 起 15 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v3 起 12 项、v4 起 13 项、v4.1 起 15 项、**v4.2 起 16 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
-> 13 since v4, **15 since v4.1**. The name is kept so existing docs and project-memory
+> 13 since v4, 15 since v4.1, **16 since v4.2**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -133,6 +134,20 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
     - 首批规则 / First rule：`prefer_initializing_formals`（构造器里 `field = param` 应改用初始化形参 `this.field`）。
       降噪：右侧必须**就是**参数名（`x = y + 1` 不算）；已用 `this.x` 的不报。
     - 与 C12 分工：C12 = 工程特有（连续下划线 / 私有命名）；C16 = 通用 lint。
+16. **第三方 API 废弃/迁移名单（ERROR，表驱动）** / **Deprecated third-party API (table-driven)**:
+    `DEPRECATED_API_RULES` 每条 = (标识符, 豁免 import, 中英提示)；命中即 **ERROR**。
+    Each entry in `DEPRECATED_API_RULES` is (identifier, exempt-import, zh/en message); a hit is an **ERROR**.
+    - **v4.2 新增**（起因 M-008：Riverpod 3 把 `StateProvider` 挪进 `legacy.dart`，
+      宿主报 `Method not found: 'StateProvider'`，C11 抓不到 —— 该符号既不在工程内、也不在 import 列表里）。
+      **Added in v4.2** (M-008: Riverpod 3 moved `StateProvider` into `legacy.dart`; C11 can't see it —
+      the symbol is neither declared in-project nor in the import list).
+    - 首批 7 条：Riverpod 3 legacy 6 条（`StateProvider` / `StateProviderFamily` /
+      `StateNotifier` / `StateController` / `StateNotifierProvider` / `StateNotifierProviderFamily`）
+      + 已移除 1 条（`ChangeNotifierProvider`，legacy 也不再导出）。
+    - 降噪：匹配在 `mask_strings_comments` **之后**做（注释里写「Riverpod 3 起 StateProvider 已移入 legacy」
+      不算数）；豁免 import 命中即放行；每标识符每文件只报一次。
+      Matched **after** `mask_strings_comments` (a comment mentioning it doesn't count);
+      an exempt import pardons the file; one report per identifier per file.
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 

@@ -193,6 +193,33 @@
   故加 `(?=,|$)` 锚定；②命名参数段要**剥掉 `{}`**（`{required int b}` → 否则取不到 `b`）。
 - **状态**：✅ 已补斧并反向验证通过（2026-10-04）。fitcoach 复跑 C16 零告警（已修）。
 
+### M-008 · 2026-10-04 · fitcoach(#32 E14-b) · `Method not found: 'StateProvider'` → **新增 C17（第三方废弃 API 名单）**
+
+- **症状**：宿主 `flutter analyze` 报
+  `error - The function 'StateProvider' isn't defined ... lib\providers\providers.dart:216:32 - undefined_function`
+  （编译期硬错，连带 `test/widget_test.dart` 整个 `Failed to load`）。
+- **根因**：Riverpod **3.x** 把 `StateProvider` 等一批 API 从主入口挪进
+  `package:flutter_riverpod/legacy.dart`（`ChangeNotifierProvider` 甚至整个移除）。
+  工程早在 #26 就把唯一的 `StateProvider` 预迁成 `Notifier`（`theme/theme_mode.dart`），
+  但 E14-b 新写的 provider 又用了旧写法 —— **升级完成后的"回潮"没有工具把门**。
+- **旧九板斧为何漏**：C11「符号用到没 import」比对的是**工程内声明**的符号，
+  而这类符号**既不在工程内、也不在 import 列表里**（包把它挪走了）→ 完全落在盲区。
+  本质是一类新问题：**第三方 API 的废弃/迁移**，不是 import 遗漏。
+- **补的斧**：新增 **C17（第三方 API 废弃/迁移名单，表驱动）** ——
+  `DEPRECATED_API_RULES` 每条 = (标识符, 豁免 import, 中英提示)；
+  命中即 **ERROR**；匹配在 `mask_strings_comments` 之后做（注释/字符串提及不算）；
+  豁免 import 为空表示「已被移除、怎么 import 都报」。首批 7 条（Riverpod 3 legacy 6 + 已移除 1）。
+- **最小复现**：临时工程 5 个文件，实测
+  ①`StateProvider` + 只 import 主入口 → **报**（a.dart:2）
+  ②`StateProvider` + import `flutter_riverpod/legacy.dart` → 不报
+  ③只在注释里提到 `StateProvider` → 不报
+  ④`ChangeNotifierProvider`（legacy 也没有）→ **报**（d.dart:2）
+  ⑤`Notifier` 正常写法 → 不报。**5/5 PASS**。
+- **降噪要点**：必须走 `mask_strings_comments`，否则 `theme_mode.dart` /
+  `providers.dart` 里「Riverpod 3 起 StateProvider 已移入 legacy」这类**说明性注释**会被误报
+  （fitcoach 全工程复跑 C17 零告警，正是靠它）。
+- **状态**：✅ 已补斧并反向验证通过（2026-10-04）。
+
 ---
 
 ## 新条目模板 / Template for New Entries
