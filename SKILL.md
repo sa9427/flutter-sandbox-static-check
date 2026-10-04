@@ -1,13 +1,14 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.2 起 16 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.3 起 17 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 16 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 17 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
   **ConsumerState 与 widget 配对**、**成员存在性**、**lint 规则表**、
-  **第三方 API 废弃/迁移（如 Riverpod 3 的 StateProvider）**。
+  **第三方 API 废弃/迁移（如 Riverpod 3 的 StateProvider）**、
+  **局部标识符不得带 `_` 前缀（局部声明与顶层私有的 `_` 规则相反）**。
   Flutter/Dart static checker that runs without the Dart SDK: 13 checks
   (test/ included by default) — broken imports, dependency consistency,
   relative-import leftovers, enum value existence, asset references, named-arg
@@ -62,12 +63,12 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 十六板斧检查项 / The Sixteen Checks
+## 十七板斧检查项 / The Seventeen Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
-> v3 起 12 项、v4 起 13 项、v4.1 起 15 项、**v4.2 起 16 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、**v4.3 起 17 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
-> 13 since v4, 15 since v4.1, **16 since v4.2**. The name is kept so existing docs and project-memory
+> 13 since v4, 15 since v4.1, 16 since v4.2, **17 since v4.3**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -148,6 +149,20 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       不算数）；豁免 import 命中即放行；每标识符每文件只报一次。
       Matched **after** `mask_strings_comments` (a comment mentioning it doesn't count);
       an exempt import pardons the file; one report per identifier per file.
+17. **局部标识符不得带 `_` 前缀（HINT）** / **No leading underscore on locals**:
+    函数体内声明的局部变量/局部函数**不能**以下划线开头（`no_leading_underscores_for_local_identifiers`）。
+    Local variables/functions declared **inside a function body** must not start with `_`.
+    - **v4.3 新增**（起因 M-009：宿主 `analyze` 报 `custom_exercise_test.dart:16`
+      测试 helper 写成 `Exercise _custom({...})` —— 它是 `main()` 里的**局部函数**）。
+      **Added in v4.3** (M-009: the host flagged `_custom` — a helper declared inside `main()`).
+    - ⚠️ **与 C12 方向相反**，别混：顶层/类成员私有 `_foo` **合法**且必须 lowerCamelCase（C12 管）；
+      局部 `_foo` **非法**（C18 管）。所以 C18 必须先排除类体，否则两条打架。
+      Opposite of C12: top-level/class-member `_foo` is **legal**; local `_foo` is **not**.
+    - 降噪三道 / Three de-noising filters：①花括号栈把**类体 / 枚举体**整片放行
+      ②必须带「类型」或 `var/final/const/late` 修饰之一，否则 `_helper('x')` 这类**调用**
+      与 `Type _helper(` 长得一样（首版漏这条 → 236 条误报里只有 1 条真）
+      ③类型段里出现任何**语句关键字**（`return`/`if`/`await`/`?` 前的表达式…）即判为语句
+      （`return split ? _buildSplit(...)` 里 `split ?` 曾被当成类型）。
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 

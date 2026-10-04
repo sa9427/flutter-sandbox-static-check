@@ -76,10 +76,10 @@ python3 check.py --no-test
 
 ## 十三板斧检查项 / The Thirteen Checks
 
-> ⚠️ **本表停在 v4（13 项）** —— v4.1 起已增至 15 项、**v4.2 起 16 项**，
+> ⚠️ **本表停在 v4（13 项）** —— v4.1 起已增至 15 项、v4.2 起 16 项、**v4.3 起 17 项**，
 > **最新完整清单见 `SKILL.md`**（本文件不再同步逐项正文，避免双真源）。
 > 仅保留 v4 的历史说明与「设计借鉴 / 许可」两节。
-> This table stops at v4 (13 checks) — v4.1 has 15 and **v4.2 has 16**;
+> This table stops at v4 (13 checks) — v4.1 has 15, **v4.2 has 16, v4.3 has 17**;
 > **see `SKILL.md` for the current list**.
 
 > 名称沿革 / Naming note：skill 名 "九板斧 / Nine-Axe" 是历史叫法；

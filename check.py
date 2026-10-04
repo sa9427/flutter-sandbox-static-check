@@ -1515,6 +1515,101 @@ def check_deprecated_api(files, findings):
                                 % (ident, en))))
 
 
+# ── C18（2026-10-05 新增）· 局部标识符不得以下划线开头 ──────────────────
+#
+# 由来（宿主 `flutter analyze` 报 test/data/custom_exercise_test.dart:16:12
+# no_leading_underscores_for_local_identifiers）：测试 helper 写成
+# `Exercise _custom({...})` —— 它是写在 main() 里的**局部函数**。
+#
+# 与 C12 的分工（易混，写死在这里）：
+#   - C12 管**顶层/类成员私有**命名 —— `_foo` 合法，但必须 lowerCamelCase；
+#   - C18 管**函数体内**的声明 —— Dart 里局部标识符带 `_` 反而非法。
+#   ⚠️ 两条方向相反，所以 C18 必须先把「类体」排除干净，否则会跟 C12 打架。
+#
+# 零误报设计：
+#   1. 花括号栈区分「类体 / 函数体」→ 类成员 `final _x = ...`、顶层 `void _foo()`
+#      一律放行；只有某个 `{}` 内部（函数体 / 局部块）的声明才判定；
+#   2. 只认**声明**形态，且必须有「类型」或「var/final/const/late」修饰之一 ——
+#      否则 `_strength('s1', ...)` 这类**调用**长得跟 `Type _name(` 一模一样，
+#      （2026-10-05 首版漏了这一条 → 236 条全是误报，仅 1 条为真）；
+#      再用关键字黑名单挡掉 `return _foo(` / `await _foo(` 这类语句。
+_LOCAL_DECL_RE = re.compile(
+    r'^[ \t]*((?:late\s+|final\s+|const\s+|var\s+|static\s+)*)'
+    r'([A-Za-z_][\w<>,\s\[\]?!]*?\s+)?(_[a-z]\w*)\s*(?=\(|=[^=])')
+#   3. 形参名 `_x` 不报（形参不在此 lint 范围）—— 声明形态要求行首附近是类型。
+# 挡掉「语句里的下划线标识符」：`return _x(` / `throw _e;` 等
+_LOCAL_DECL_STOPWORDS = frozenset(
+    'return if else for while do switch case try catch finally throw await yield '
+    'new print expect assert rethrow break continue'.split())
+
+
+def _scope_events(code):
+    """[(pos, kind)] —— 每个 `{` 的位置与类别。
+
+    kind: 'class' = 类 / 枚举 / mixin / extension 的**声明体**；
+          'body'  = 函数体或局部块；'pop' = 对应的 `}`。
+    用它把「类成员」（`_` 合法）与「局部声明」（`_` 非法）区分开。
+    """
+    events = []
+    pending = False
+    for m in re.finditer(r'\{|\}|;|\b(?:class|enum|mixin|extension)\b', code):
+        tok = m.group(0)
+        if tok == '{':
+            events.append((m.start(), 'class' if pending else 'body'))
+            pending = False
+        elif tok == '}':
+            events.append((m.start(), 'pop'))
+        elif tok == ';':
+            pending = False
+        else:
+            pending = True
+    return events
+
+
+def check_local_underscore(files, findings):
+    """C18 · 局部标识符不得以下划线开头（no_leading_underscores_for_local_identifiers）。"""
+    for fp in files:
+        text = read(fp)
+        code = mask_strings_comments(text)
+        events = _scope_events(code)
+        stack = []
+        ev = 0
+        off = 0
+        for i, raw in enumerate(text.split('\n')):
+            line_start = off
+            off += len(raw) + 1
+            # 重放花括号栈到本行起点（events 已按位置有序）
+            while ev < len(events) and events[ev][0] < line_start:
+                kind = events[ev][1]
+                if kind == 'pop':
+                    if stack:
+                        stack.pop()
+                else:
+                    stack.append(kind)
+                ev += 1
+            if not stack or stack[-1] != 'body':
+                continue
+            m = _LOCAL_DECL_RE.match(raw)
+            if not m:
+                continue
+            prefix, type_name, name = m.group(1), m.group(2), m.group(3)
+            # 无修饰也无类型 → 是**调用**而非声明（`_strength('s1', ...)`），不报
+            if not (prefix or type_name):
+                continue
+            # 类型段里出现语句关键字 → 是**语句**而非声明。
+            # ⚠️ 必须查**每一个** token：首版只查最后一个，`return split ? _buildSplit(...)`
+            #    里的 `split ?` 会被当成类型、把方法调用误报成声明（2026-10-05 实踩）。
+            if type_name and _LOCAL_DECL_STOPWORDS.intersection(type_name.split()):
+                continue
+            findings.append(('HINT', 'C18', fp, i + 1,
+                             bi('局部标识符 %s 不应以下划线开头'
+                                '（lint no_leading_underscores_for_local_identifiers；'
+                                '只有顶层/类成员的私有名才用 `_` 前缀）' % name,
+                                'local identifier %s should not start with an underscore '
+                                '(lint no_leading_underscores_for_local_identifiers)'
+                                % name)))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -1571,6 +1666,7 @@ def main():
     check_member_exists(files, findings)
     check_lint_table(files, findings)
     check_deprecated_api(files, findings)
+    check_local_underscore(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']

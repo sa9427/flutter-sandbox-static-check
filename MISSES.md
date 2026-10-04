@@ -222,6 +222,34 @@
 
 ---
 
+### M-009 · 2026-10-05 · fitcoach(#33 E15-a) · 局部 helper 写成 `_custom` → **新增 C18（局部标识符 `_` 前缀）**
+
+- **症状**：宿主 `flutter analyze` 报
+  `info - The local variable '_custom' starts with an underscore ... test\data\custom_exercise_test.dart:16:12 - no_leading_underscores_for_local_identifiers`。
+- **根因**：`_custom` 是写在 `main()` 里的**局部函数**。Dart 的 `_` 前缀规则是
+  **作用域相关**的 —— 顶层 / 类成员的私有名用 `_` 合法；**函数体内**的局部变量、局部函数
+  用 `_` 前缀**非法**（恰恰与 C12 管的「顶层私有必须 lowerCamelCase」方向相反）。
+  正解：直接改名（局部去掉 `_`）。
+- **旧九板斧为何漏**：C12 只管了「下划线」的两个**工程特有**形态（连续下划线、
+  顶层私有 `_UpperCamel`），**没有"作用域"这个维度** —— 它连类成员都刻意排除，
+  更不会去看函数体内的声明。
+- **补的斧**：新增 **C18** —— 花括号栈区分「类体 / 函数体」，只判函数体内的
+  `Type _name(` 与 `(var|final|const|late) [Type] _name =` 两种声明形态。
+- **最小复现**：临时工程 `lib/main.dart`，实测
+  ①局部函数 `String _custom({...}) => ...` → **报**
+  ②`final _localVar = 1;` / `int _typedVar = 2;` → **报**
+  ③类成员 `final int _member = 1;` / 顶层 `int _topLevel()` / `final int _topVar` → 不报
+  ④调用 `_custom()` / `_topLevel()`（行首无类型无修饰）→ 不报。**3 命中 / 0 误报**。
+- **降噪坑（首版两处，实测 236 条里只有 1 条真）**：
+  ①**调用与声明长得一样** —— `_strength('s1', ...)` 与 `Type _name(` 无法从形态区分，
+  必须要求「有类型段」或「有 `var/final/const/late` 修饰」之一，否则全是误报；
+  ②类型段里可能混进**语句** —— `return split ? _buildSplit(...)` 里的 `split ?`
+  会被当成类型（`?` 在类型字符类里），故类型段的**每个** token 都要过关键字黑名单，
+  不能只查最后一个。
+- **状态**：✅ 已补斧并反向验证通过（2026-10-05）。fitcoach 全工程复跑 **0 告警**。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown
