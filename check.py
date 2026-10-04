@@ -458,6 +458,15 @@ def collect_named_params(lib_dir):
             # 只取一层花括号（[^{}] 避免跨嵌套误配）
             for m in re.finditer(r'\{([^{}]*)\}', text):
                 body = m.group(1)
+                # 先剥掉 `///` 文档注释行（2026-10-04 修）：
+                # 参数**上方**的注释里若出现 `= `（例如「`null` = 全量」），
+                # 属于同一 part（注释与参数之间没有逗号），而下面的「按 = 截断
+                # 取默认值之前」会把参数名一起截掉 → 收进去的是 `null` 而不是
+                # 真正的参数名 → 该参数在所有调用点被误报成「拼写错误」。
+                # （实踩：buildVolumeTrend 的 exerciseIds）
+                # 顺带也消掉「注释里的逗号把 part 切碎」的问题。
+                body = '\n'.join(ln for ln in body.split('\n')
+                                 if not ln.strip().startswith('///'))
                 for part in body.split(','):
                     part = part.strip()
                     if not part:
