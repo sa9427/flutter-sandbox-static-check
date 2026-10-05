@@ -64,8 +64,11 @@ DART_LIB_SYMBOLS = {
                 'Encoder', 'ClosableStringSink', 'StringConversionSink'},
     'math': {'min', 'max', 'pow', 'sqrt', 'sin', 'cos', 'tan', 'atan', 'atan2', 'exp', 'log',
              'pi', 'e', 'Random', 'Point', 'Rectangle', 'MutableRectangle'},
+    # 'unawaited'：2026-10-05 补。此前不在表里 → `import 'dart:async'` 只用它时
+    # C7 会误报「公开符号均未出现」（实踩：widgets/volume_ceiling_card.dart）。
     'async': {'Future', 'Stream', 'StreamController', 'StreamSubscription', 'Completer', 'Timer',
-              'Zone', 'scheduleMicrotask', 'runZoned', 'AsyncError', 'FutureOr'},
+              'Zone', 'scheduleMicrotask', 'runZoned', 'AsyncError', 'FutureOr',
+              'unawaited'},
     'collection': {'Queue', 'ListQueue', 'DoubleLinkedQueue', 'LinkedHashMap', 'LinkedHashSet',
                    'HashMap', 'HashSet', 'UnmodifiableListView', 'UnmodifiableMapView',
                    'UnmodifiableSetView', 'MapBase', 'SetBase', 'ListBase'},
