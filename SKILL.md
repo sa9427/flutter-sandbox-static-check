@@ -1,9 +1,9 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.7 起 21 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.8 起 22 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 21 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 22 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
   **ConsumerState 与 widget 配对**、**成员存在性**、**lint 规则表**、
@@ -68,14 +68,14 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 二十一板斧检查项 / The Twenty-One Checks
+## 二十二板斧检查项 / The Twenty-Two Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
 > v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、
-> v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、**v4.7 起 21 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、v4.7 起 21 项、**v4.8 起 22 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
 > 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, 18 since v4.4,
-> 19 since v4.5, 20 since v4.6, **21 since v4.7**. The name is kept so existing docs and project-memory
+> 19 since v4.5, 20 since v4.6, 21 since v4.7, **22 since v4.8**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -249,6 +249,25 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       临时可用 `.first` / `descendant` 消歧（本斧会放行）。
       Fix = add a `static const Key` to the widget and use `find.byKey`;
       `.first` / `descendant` also pass the check.
+22. **静态成员必须 `类名.成员` 访问，不能裸名（ERROR）** /
+    **Static members must be qualified with `ClassName.`**:
+    Dart 的 `static` **不参与继承**、也**不能裸名访问** —— 在 `State<X>` 子类里写
+    `key: valueKey`（成员定义在 `X` 上）→ 宿主报 `undefined_identifier`
+    （一处就让 `flutter test` 全量 `Failed to load`）。
+    Dart statics are not inherited and cannot be reached by bare name from another
+    class, not even from `State<X>`.
+    - **v4.8 新增**（起因 M-016：`lib/widgets/rpe_stepper.dart:149` 的
+      `key: RpeStepper.valueKey` 写成了 `key: valueKey`）。
+      **Added in v4.8** (M-016).
+    - 只查**同文件**：某个类里定义的 `static` 成员，在**另一个类的类体内**被裸名使用。
+      跨文件的情形（在别的文件里裸用）已属导入/符号分析范畴，暂不覆盖。
+      Same-file only: a `static` member used by bare name inside **another class body**.
+    - ⚠️ 三道降噪缺一不可（每一道都是反向验证时真踩出来的）：
+      ① 本文件有同名**非静态**声明 → 跳过；
+      ② 只报「落在另一个类体内」的用法（顶层/函数外太宽，放行）；
+      ③ **声明不算用法** —— `final String dateKey;` / `{required this.dateKey}`
+      这类同名字段是合法的（第一版报了 2 处误报）。
+      Three denoising rules are all required, each found by real reverse-validation.
     - 只对 `InkWell / InkResponse / GestureDetector / IconButton / TextButton /
       ElevatedButton / OutlinedButton / FloatingActionButton / Icon` 报警
       （`Text` / `Container` 之类太常见，报了就是噪声）；整行注释跳过 →

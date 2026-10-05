@@ -429,6 +429,43 @@
 
 ---
 
+### M-016 · 2026-10-06 · fitcoach（#57 步进器）· 静态成员裸名访问 → **新增 C23**
+
+- **症状**：宿主 `flutter analyze` 报
+  `error - Undefined name 'valueKey' ... lib\widgets\rpe_stepper.dart:149 - undefined_identifier`；
+  `flutter test` **594 -3**（3 个测试文件集体 `Failed to load` —— 又是「一个 lib 文件
+  编译失败拖垮全部依赖方」，与 M-014 同一个放大机制）。
+- **根因**：`valueKey` 是定义在 `RpeStepper`（widget 类）上的 `static const Key`，
+  在 `_RpeStepperState.build` 里写成了 `key: valueKey`。
+  **Dart 的 `static` 不参与继承、也不能裸名访问**（不像 Java 允许子类裸用父类静态成员），
+  必须写 `key: RpeStepper.valueKey`。
+- **旧九板斧为何漏**：21 项里没有任何一条管「静态成员的**访问方式**」（此前补的全是
+  声明侧：命名、顺序、import）。
+- **补的斧**：**C23**（v4.8 起 22 项，ERROR 级，仅**同文件**）：某个类里定义的 `static`
+  成员，在**另一个类的类体内**被裸名使用 → 报警。
+- **三道降噪（缺一不可，每道都是反向验证时真踩出来的）**：
+  ① 本文件有同名**非静态**声明 → 跳过；
+  ② 只报「落在另一个类体内」的用法（顶层 / 函数外太宽 → 放行）；
+  ③ **声明不算用法** —— 首版把 `class DayBucket { final String dateKey; }` 这类
+  **同名字段声明**当成用法，误报 2 处（`stats_service.dart:29 / :222`）；
+  判据 = 行内 `(final|const|var|late) ... <name>` 或 `this.<name>` → 跳过。
+  ⚠️ 加③时特意验证过不会把真错放行：`const SizedBox(key: valueKey)` 里 `const` 与
+  成员名之间隔着 `SizedBox(`，字符类到不了 → 仍会报。
+- **另一处首版 bug（记下来防再犯）**：成员名正则写成
+  `static\s+(?:const|final|var)\s+(\w+)` → 抓到的是**类型名**（`Key`）而不是成员名
+  （`valueKey`），导致造错样本 **0 命中**；改成非贪婪
+  `static\s+[\w<>,\[\]\s\?]+?\s+(\w+)\s*[\(=;{]` 取**最后一个**标识符才对。
+- **最小复现**：临时工程 `lib/a.dart` —— 类 A 定义 `static const Key valueKey`，
+  `_BState.build` 里 `key: valueKey` → 报 `[C23] lib/a.dart:15`；
+  定义类体内裸用（第 10 行）与限定名访问 `Stepper2.valueKey`（第 18 行）→ **均不报**；
+  fitcoach 全库 154 文件复跑 **0 误报**。
+- **人工纪律**：给 widget 加 `static const Key` 后，在 `State` 类里引用一律带类名；
+  同理适用于所有跨类的静态常量 / 静态方法。
+- **状态**：✅ 已补斧并反向验证通过（真阳性命中 + 2 类放行正确 + 全库 0 误报）。
+- **已知边界**：只查同文件；**跨文件**裸用（别的文件里裸用某个类的静态成员）暂不覆盖。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown

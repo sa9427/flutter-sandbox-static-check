@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Flutter 沙箱静态体检（九板斧 / v4.7 起 21 项）—— 纯标准库，无第三方依赖。
+Flutter 沙箱静态体检（九板斧 / v4.8 起 22 项）—— 纯标准库，无第三方依赖。
 
 对 Flutter 工程的 lib/（v3 起默认含 test/）做文本静态检查，替代无法运行的 flutter analyze。
 用法：
@@ -1885,6 +1885,90 @@ def check_ambiguous_finder(files, findings):
                                 '/ descendant instead' % (m.group(1), m.group(1)))))
 
 
+# C23 · 静态成员必须 `类名.成员` 访问，不能裸名。
+# Dart 的 static 成员**不参与继承**、也**不能裸名访问**：在 `State<X>` 子类里写
+# `key: valueKey`（成员定义在 X 上）→ 宿主报 `undefined_identifier`。
+_CLASS_DECL_RE = re.compile(r'^\s*(?:abstract\s+)?class\s+(\w+)')
+# ⚠️ 必须**非贪婪**且用最后一个标识符：成员名在类型之后
+# （`static const Key valueKey = ...` 的成员名是 `valueKey` 不是 `Key` ——
+#  第一版写成 `static\s+(?:const|final|var)\s+(\w+)` 就抓成了类型名，导致 0 命中）。
+_STATIC_MEMBER_RES = (
+    re.compile(r'^\s*static\s+[\w<>,\[\]\s\?]+?\s+(\w+)\s*[\(=;{]'),
+)
+
+
+def _class_spans(lines):
+    """每个 `class` 体的行范围（0-based，含端点）—— 花括号计数配平。"""
+    spans = []
+    for i, ln in enumerate(lines):
+        if not _CLASS_DECL_RE.match(ln):
+            continue
+        depth = 0
+        end = len(lines) - 1
+        for j in range(i, len(lines)):
+            depth += lines[j].count('{') - lines[j].count('}')
+            if depth <= 0 and j > i:
+                end = j
+                break
+        spans.append((i, end))
+    return spans
+
+
+def check_static_member_unqualified(files, findings):
+    """C23 · 静态成员在「非定义类」里被裸名访问 → 宿主 `undefined_identifier`。"""
+    for fp in files:
+        code = mask_strings_comments(read(fp))
+        lines = code.split('\n')
+        spans = _class_spans(lines)
+        if not spans:
+            continue
+        statics = []  # (成员名, 所属类 span 下标, 定义行)
+        for si, (s, e) in enumerate(spans):
+            for j in range(s, e + 1):
+                for rx in _STATIC_MEMBER_RES:
+                    m = rx.match(lines[j])
+                    if m:
+                        statics.append((m.group(1), si, j))
+                        break
+        if not statics:
+            continue
+        for name, si, defline in statics:
+            # 降噪①：本文件里还有同名**非静态**声明（局部变量 / 参数）→ 用法可能合法
+            if re.search(r'^\s*(?:final|const|var|late)\s+%s\b' % re.escape(name),
+                         code, re.M):
+                continue
+            use_re = re.compile(r'(?<![\.\w])%s\b' % re.escape(name))
+            cs, ce = spans[si]
+            for j, ln in enumerate(lines):
+                if j == defline or cs <= j <= ce:
+                    continue  # 定义类体内裸用是合法的
+                if not use_re.search(ln):
+                    continue
+                # 降噪③：**声明**不算用法 —— 别的类里有同名字段
+                # （`final String dateKey;` / `{required this.dateKey}`）是合法且常见的，
+                # 第一版把它们全报了（fitcoach 2 处误报）。
+                # ⚠️ 不能误跳真错：`const SizedBox(key: valueKey)` 里 `const` 后面
+                # 隔着 `SizedBox(`，`[\w\s]*` 到不了成员名 → 不会被放行。
+                if re.search(r'(?:final|const|var|late)\s+[\w<>,\[\]\s\?]*\b%s\b'
+                             % re.escape(name), ln) or \
+                        re.search(r'this\.%s\b' % re.escape(name), ln):
+                    continue
+                # 降噪②：只报「落在另一个类的类体内」的用法；顶层 / 函数外的
+                # 裸名太宽（可能是别的常量），放行以免噪声。
+                if not any(s <= j <= e for (s, e) in spans):
+                    continue
+                findings.append(('ERROR', 'C23', fp, j + 1,
+                                 bi('静态成员 `%s` 必须写成 `类名.%s` —— Dart 的 static '
+                                    '不参与继承、也不能裸名访问，在别的类（哪怕是 '
+                                    '`State<X>` 子类）里裸写会报 undefined_identifier'
+                                    % (name, name),
+                                    'static member `%s` must be qualified as '
+                                    '`ClassName.%s` — Dart statics are not inherited '
+                                    'and cannot be accessed by bare name from another '
+                                    'class (not even from `State<X>`); the host '
+                                    'reports undefined_identifier' % (name, name))))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -1946,6 +2030,7 @@ def main():
     check_flow_braces(files, findings)
     check_library_directive_order(files, findings)
     check_ambiguous_finder(files, findings)
+    check_static_member_unqualified(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']
