@@ -250,6 +250,39 @@
 
 ---
 
+### M-010 · 2026-10-05 · fitcoach(#47 F1 计时组) · 加字段漏了构造参数 → **新增 C19（final 字段初始化）**
+
+- **症状**：宿主 `flutter test` 报
+  ```
+  lib/data/models.dart:293:9: Error: No named parameter with the name 'isTimed'.
+  lib/data/models.dart:248:9: Context: Found this candidate, but the arguments don't match.
+  lib/data/models.dart:236:14: Error: Final field 'isTimed' is not initialized.
+  ```
+  —— 连带 **39 个测试文件集体 `Failed to load`**（它们都要编译 `models.dart`）。
+- **根因**：给 `Exercise` 加 `final bool isTimed;` 时，构造函数里的
+  `this.isTimed = false,` **没写进去**（`toJson`/`fromJson`/`archivedCopy`/`asCustomCopy`
+  四处都写了，唯独漏了构造 —— 而**只有这一处是编译期硬错**，其余四处是静默丢数据）。
+  ⚠️ 另记一条人的坑：那一次 Edit **返回了「Successfully edited」但没落盘**，
+  我又没回读校验 → 直到宿主报错才发现。**改模型字段后必须 grep 一遍五处落点。**
+- **旧九板斧为何漏**：17 项里没有任何一条管「字段声明 ↔ 构造参数」的一致性 ——
+  它既不是 import、也不是命名、也不是括号，是**语义完整性**类，纯文本工具此前完全没覆盖。
+- **补的斧**：新增 **C19** —— 类/枚举体第一层的 `final T x;`（声明处无初值、不带 `late`）
+  必须在类体里出现 `this.x` / `super.x` / `x =`（初始化列表）之一，否则报 **ERROR**。
+- **最小复现**（实测三步 / Three-step verification）：
+  ① 修复态跑全工程 → **0 命中**（129 文件零误报）；
+  ② 删掉 `this.isTimed = false,` → **报 1 条**，`lib/data/models.dart:236`
+     （与宿主报错行号**逐字一致**）；
+  ③ 边界探针（临时 `lib/tmp_c19_probe.dart`，跑完即删）：
+     `this.a` / `final int b = 1` / `late final int c` / `static final int s = 2` /
+     函数体内 `final int local` / 初始化列表 `d = v` / 位置参数 `this.g`
+     —— **全部不报**，只有漏改的 `e` 报 → **1 命中 / 0 误报**。
+- **实现坑（记下来，同类必踩）**：`_CLASS_DECL_RE` 的 `^` **必须配 `re.M`** ——
+  首版漏了它，`^` 只匹配文件开头 → 一个类都扫不到 → 反向验证直接 0 命中。
+  **补斧后必须重跑「先造错、再还原」两步**，只看"干净"会误判为"已生效"。
+- **状态**：✅ 已补斧并反向验证通过（2026-10-05）。fitcoach 全工程复跑 **0 告警**。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown

@@ -1,14 +1,15 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.3 起 17 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.4 起 18 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 17 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 18 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
   **ConsumerState 与 widget 配对**、**成员存在性**、**lint 规则表**、
   **第三方 API 废弃/迁移（如 Riverpod 3 的 StateProvider）**、
-  **局部标识符不得带 `_` 前缀（局部声明与顶层私有的 `_` 规则相反）**。
+  **局部标识符不得带 `_` 前缀（局部声明与顶层私有的 `_` 规则相反）**、
+  **`final` 字段必须在构造函数里初始化（加字段最易漏的一处，编译期硬错）**。
   Flutter/Dart static checker that runs without the Dart SDK: 13 checks
   (test/ included by default) — broken imports, dependency consistency,
   relative-import leftovers, enum value existence, asset references, named-arg
@@ -66,9 +67,9 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 ## 十七板斧检查项 / The Seventeen Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
-> v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、**v4.3 起 17 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、**v4.4 起 18 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
-> 13 since v4, 15 since v4.1, 16 since v4.2, **17 since v4.3**. The name is kept so existing docs and project-memory
+> 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, **18 since v4.4**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -162,7 +163,30 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       ②必须带「类型」或 `var/final/const/late` 修饰之一，否则 `_helper('x')` 这类**调用**
       与 `Type _helper(` 长得一样（首版漏这条 → 236 条误报里只有 1 条真）
       ③类型段里出现任何**语句关键字**（`return`/`if`/`await`/`?` 前的表达式…）即判为语句
-      （`return split ? _buildSplit(...)` 里 `split ?` 曾被当成类型）。
+18. **`final` 字段必须在构造函数里初始化（ERROR）** / **Final fields must be initialized**:
+    类/枚举里 `final T x;`（声明处无初值、不带 `late`）必须在构造参数里出现 `this.x`
+    （或 `super.x` / 初始化列表 `x = ...`），否则宿主报
+    `Final field 'x' is not initialized`（编译期硬错）。
+    A `final T x;` field (no initializer, not `late`) must be initialized via
+    `this.x` / `super.x` / an initializer-list `x = ...`, or the compiler errors out.
+    - **v4.4 新增**（起因 M-010：给 `Exercise` 加 `final bool isTimed;` 却漏了
+      构造函数里的 `this.isTimed = false` —— **一处漏改，39 个测试文件集体
+      Failed to load**，因为它们都要编译 `models.dart`）。
+      **Added in v4.4** (M-010: adding `final bool isTimed;` to `Exercise` without
+      `this.isTimed = false` broke **39 test files** at once).
+    - ⚠️ **为什么必须补**：加字段是最高频改动，而「字段 / 构造 / `toJson` / `fromJson` /
+      copy 系列」五处里**只有这一处是编译期硬错**，其余四处都是**静默丢数据**。
+      Adding a field is the most common edit, and of the five places to update, only
+      this one is a hard compile error — the other four fail **silently**.
+    - 降噪四道 / Four de-noising filters：①只认**类体第一层**（花括号深度 == 0），
+      函数体内的 `final int local;` 是局部变量不是字段
+      ②带初值（`final int b = 1;`）或 `late`（允许延后赋值）放行
+      ③类体里出现过 `this.x` / `super.x` / `x =` 任一项即放行 —— 多构造场景
+      只查到其中一个也算过，**宁可漏报也不误报**
+      ④类里没有生成构造函数（只有 `factory` / 纯静态类）→ 整类跳过。
+    - ⚠️ **实现坑**：`_CLASS_DECL_RE` 的 `^` 必须配 `re.M`，否则只匹配文件开头、
+      一个类都扫不到（首版漏 → 反向验证 0 命中才发现）。
+      `_CLASS_DECL_RE` needs `re.M`; without it **no class is ever scanned**.
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 

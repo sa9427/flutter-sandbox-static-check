@@ -1610,6 +1610,88 @@ def check_local_underscore(files, findings):
                                 % name)))
 
 
+# ── C19（2026-10-05 新增）· final 字段必须在构造函数里初始化 ────────────
+#
+# 由来（宿主 `flutter test` 报 lib/data/models.dart:236
+# `Error: Final field 'isTimed' is not initialized`）：给 `Exercise` 加了
+# `final bool isTimed;` 却漏了构造函数里的 `this.isTimed = false`
+# —— 一处漏改，**39 个测试文件集体 Failed to load**（它们都要编译 models.dart）。
+#
+# ⚠️ 为什么必须补：**加字段是最高频的改动**，而「五处都要带」（字段声明 / 构造 /
+# `toJson` / `fromJson` / copy 系列）里**只有这一处是编译期硬错**，其余四处都是
+# 静默丢数据。沙箱没有分析器，这类错误只能靠文本体检兜住。
+#
+# 零误报设计（漏报可以接受，误报不行）：
+#   1. 只管 `class` / `enum` / `mixin`（Dart 对类与枚举都要求 final 字段初始化）；
+#   2. 字段必须带 `final`、声明处**无初值**、且**不带 late**（late 允许延后赋值）；
+#   3. **只认类体第一层** —— 函数体内的 `final int x;` 是局部变量，不是字段，
+#      用花括号深度 == 0 过滤（否则满屏误报）；
+#   4. 只要类体文本里出现过 `this.<name>`（构造参数）或 `super.<name>` 或
+#      `<name> =`（初始化列表）就放行 —— 多构造函数场景只查到其中一个也算过，
+#      宁可漏报也不误报；
+#   5. 类里**没有任何生成构造函数**（只有 `factory` / 纯静态类）→ 整类跳过。
+# ⚠️ 必须 re.M：`^` 要匹配**每行**行首（首版漏了它 → 一个类都扫不到，
+#    反向验证直接 0 命中；改完必须重跑「先造错再还原」两步验证）。
+_CLASS_DECL_RE = re.compile(r'^[ \t]*(?:abstract\s+)?(?:class|enum|mixin)\s+(\w+)',
+                            re.M)
+# 声明处无初值：`final bool isTimed;` / `final List<String> steps;`
+_FINAL_FIELD_RE = re.compile(
+    r'(?:^|\n)[ \t]*(?:static\s+)?final\s+(?:covariant\s+)?[\w<>,\[\]?!\s]*?\s+(_?\w+)\s*;')
+
+
+def _class_spans(code):
+    """[(class_name, body_start, body_end)] —— 类 / 枚举 / mixin 的**类体**范围。"""
+    spans = []
+    for m in _CLASS_DECL_RE.finditer(code):
+        i = code.find('{', m.end())
+        if i < 0:
+            continue
+        depth, j = 0, i
+        while j < len(code):
+            c = code[j]
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        spans.append((m.group(1), i + 1, j))
+    return spans
+
+
+def check_final_field_init(files, findings):
+    """C19 · final 字段必须在构造函数里初始化（Final field 'X' is not initialized）。"""
+    for fp in files:
+        text = read(fp)
+        code = mask_strings_comments(text)
+        for cname, s, e in _class_spans(code):
+            body = code[s:e]
+            if not re.search(r'(?:^|\n)\s*(?:const\s+)?%s(?:\.\w+)?\s*\(' % re.escape(cname),
+                             body):
+                continue  # 没有生成构造函数（只有 factory / 静态类）→ 跳过，避免误报
+            for m in _FINAL_FIELD_RE.finditer(body):
+                name = m.group(1)
+                pos = m.start() + 1 if m.group(0).startswith('\n') else m.start()
+                # 只认类体第一层：深度 > 0 说明在函数体 / 局部块里（局部变量，不是字段）
+                if body[:pos].count('{') - body[:pos].count('}') != 0:
+                    continue
+                if re.search(r'\bthis\.%s\b' % re.escape(name), body):
+                    continue
+                if re.search(r'\bsuper\.%s\b' % re.escape(name), body):
+                    continue
+                if re.search(r'(?<![\w.])%s\s*=' % re.escape(name), body):
+                    continue  # 初始化列表 `X(...) : name = ...`
+                ln = code[:s + pos].count('\n') + 1
+                findings.append(('ERROR', 'C19', fp, ln,
+                                 bi('final 字段 %s 未在构造函数里初始化'
+                                    '（加字段时最容易漏掉 `this.%s`；'
+                                    '宿主会报 Final field \'%s\' is not initialized）'
+                                    % (name, name, name),
+                                    'final field %s is not initialized in any constructor '
+                                    '(adding a field commonly misses `this.%s`)' % (name, name))))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -1667,6 +1749,7 @@ def main():
     check_lint_table(files, findings)
     check_deprecated_api(files, findings)
     check_local_underscore(files, findings)
+    check_final_field_init(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']
