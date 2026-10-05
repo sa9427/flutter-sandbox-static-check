@@ -313,6 +313,29 @@
 
 ---
 
+### M-012 · 2026-10-05 · fitcoach（#53 恢复小时分档）· 控制流跨行没包块 → **新增 C20**
+
+- **症状**：宿主 `flutter analyze` 报
+  `info - Statements in an if should be enclosed in a block ... lib\services\recovery_service.dart:77:55 - curly_braces_in_flow_control_structures`（1 issue）。
+  原文是长条件换行后顺手写成
+  `if (!exDef.targetMuscles.contains(muscle) &&\n    !exDef.synergistMuscles.contains(muscle)) continue;`。
+- **根因**：Dart 要求 if/else/for/while 的 body 包块；**但同一行的 `if (x) return;` 不报**。
+  正确写法是给 then 加花括号。
+- **旧九板斧为何漏**：18 项里没有任何一条管「控制流体是否包块」（C8 只数括号总数平衡）。
+- **补的斧**：**C20**（v4.5 起 19 项），判据 = body 与 **`if` 关键字**不同行 + 不是块。
+- **最小复现**：把 `recovery_service.dart` 里那段改回 `... ) continue;` →
+  报 `[C20] lib/services/recovery_service.dart:77`；改回块 → 0 条。
+- **⚠️ 首版实现踩的坑（记下来防复发）**：第一版按「body 与 `)` 是否同行」判断 →
+  **造错样本 0 命中**（该样本里 `continue` 与 `)` 在同一行、但与 `if` 跨行，而 lint 照样报）。
+  改成「与 `if` 关键字同行」后才命中。**反向验证必须真造错、不能只看全库 0 误报。**
+- **防误报两道**（各缺一即满屏）：①单行 `if (x) return;` 放行（全库 **380 处**既有风格）
+  ②以 `,` 结尾的是**集合字面量里的 if 元素**（`children: [if (x) const A(),]`，本工程约 56 处），
+  不是语句、lint 也不报 → 放行。
+- **状态**：✅ 已补斧并反向验证通过（真阳性 if / else 各造一次均命中、行号与宿主一致；
+  还原后 138 文件 0 误报）。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown

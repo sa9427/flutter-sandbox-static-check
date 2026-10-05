@@ -1,21 +1,25 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.4 起 18 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.5 起 19 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 18 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 19 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
   **ConsumerState 与 widget 配对**、**成员存在性**、**lint 规则表**、
   **第三方 API 废弃/迁移（如 Riverpod 3 的 StateProvider）**、
   **局部标识符不得带 `_` 前缀（局部声明与顶层私有的 `_` 规则相反）**、
-  **`final` 字段必须在构造函数里初始化（加字段最易漏的一处，编译期硬错）**。
-  Flutter/Dart static checker that runs without the Dart SDK: 13 checks
+  **`final` 字段必须在构造函数里初始化（加字段最易漏的一处，编译期硬错）**、
+  **控制流语句跨行却没包块（`curly_braces_in_flow_control_structures`）**。
+  Flutter/Dart static checker that runs without the Dart SDK: 19 checks
   (test/ included by default) — broken imports, dependency consistency,
   relative-import leftovers, enum value existence, asset references, named-arg
   spelling, unused imports (incl. dart: core libs), bracket balance,
   string-enum residue, unused deps, **used-but-not-imported symbols**,
-  **lint 6 naming & underscores**, **ConsumerState ↔ widget pairing**.
+  **lint 6 naming & underscores**, **ConsumerState ↔ widget pairing**,
+  **member existence**, **lint rule table**, **deprecated third-party APIs**,
+  **no leading underscore on locals**, **final fields must be initialized**,
+  **flow-control statements spanning lines without braces**.
   含**强制漏报反哺机制**：宿主 flutter 报出的漏报须归类 → 补斧 → 反向验证 → 登记
   `MISSES.md`（漏报台账，唯一真源）。
   Includes a **mandatory miss-feedback loop**: escapes reported by the host must be
@@ -64,12 +68,14 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 十七板斧检查项 / The Seventeen Checks
+## 十九板斧检查项 / The Nineteen Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
-> v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、**v4.4 起 18 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、
+> v4.4 起 18 项、**v4.5 起 19 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
-> 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, **18 since v4.4**. The name is kept so existing docs and project-memory
+> 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, 18 since v4.4,
+> **19 since v4.5**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -187,6 +193,26 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
     - ⚠️ **实现坑**：`_CLASS_DECL_RE` 的 `^` 必须配 `re.M`，否则只匹配文件开头、
       一个类都扫不到（首版漏 → 反向验证 0 命中才发现）。
       `_CLASS_DECL_RE` needs `re.M`; without it **no class is ever scanned**.
+19. **控制流语句跨行却没包块（HINT）** / **Flow control spanning lines without braces**:
+    `if` / `else if` / `else` / `for` / `while` 的 body **与关键字不在同一行**且没包
+    `{}` → 宿主报 `curly_braces_in_flow_control_structures`（info 级）。
+    A body that is **not on the same line as the keyword** and is not wrapped in
+    `{}` triggers `curly_braces_in_flow_control_structures` (info level).
+    - **v4.5 新增**（起因 M-012：宿主 `analyze` 报
+      `recovery_service.dart:77:55` —— 长条件换行写成
+      `if (!a.contains(m) &&\n    !b.contains(m)) continue;`）。
+      **Added in v4.5** (M-012: the host flagged `recovery_service.dart:77:55`).
+    - ⚠️ **判据是「与 `if` 关键字同行」，不是「与 `)` 同行」** —— 上面那个例子里
+      `continue` 与 `)` 在同一行、但与 `if` 跨行，**lint 照样报**。
+      首版按 `)` 判 → 造错样本 0 命中，反向验证才发现。
+      The test is "same line as the `if` keyword", **not** "same line as `)`".
+    - ⚠️ **单行写法不报**：`if (x) return;`（全库既有风格 **380 处**）lint 不报，
+      本斧也放行 —— 不区分就会满屏误报。
+      Single-line `if (x) return;` is fine (380 such lines exist) and is pardoned.
+    - ⚠️ **终止符必须是 `;`** —— 以 `,` 结尾的是**集合字面量里的 if 元素**
+      （Flutter 的 `children: [if (x) const A(),]`，本工程约 56 处），不是语句、
+      lint 也不报 → 放行。这条不加就满屏误报。
+      A `,`-terminated body is a **collection if-element**, not a statement → pardoned.
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 

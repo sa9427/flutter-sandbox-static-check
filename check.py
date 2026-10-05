@@ -1692,6 +1692,106 @@ def check_final_field_init(files, findings):
                                     '(adding a field commonly misses `this.%s`)' % (name, name))))
 
 
+# ── C20（2026-10-05 新增）· 控制流语句跨行却没包块 ────────────────────
+#
+# 由来（宿主 `flutter analyze` 报 lib/services/recovery_service.dart:77
+# info `curly_braces_in_flow_control_structures`）：长条件换行后顺手写成
+#     if (!a.contains(m) &&
+#         !b.contains(m)) continue;
+# —— then 语句与 `if` **不在同一行**，Dart lint 要求包块。
+# ⚠️ 关键区分：同一行的 `if (x) return;`（全库既有风格 **380 处**）lint **不报**，
+# 只报跨行 —— 本斧只管跨行，否则满屏误报。
+#
+# 零误报设计（漏报可以接受，误报不行）：
+#   1. 只认行首的 if / else if / for / while，以及不带括号的 else；
+#   2. 括号计数找配对 `)`（字符串与注释已 mask 成空格，括号计数安全）；
+#   3. `)` 后第一个非空字符是 `{`（含换行写的 Allman 风格）或 `;`（空语句）→ 放行；
+#   4. then 语句与 **`if` 关键字在同一行** → 放行（lint 不报）。
+#      ⚠️ 判据是「与 `if` 同行」，**不是**「与 `)` 同行」：
+#      `if (a &&\n    b) continue;` 里 `continue` 与 `)` 同行、但与 `if` 跨行，
+#      lint **照样报**（宿主实报 recovery_service.dart:77:55，首版按 `)` 判 → 漏报）；
+#   5. ⚠️ **终止符必须是 `;`** —— 以 `,` 结尾的是**集合字面量里的 if 元素**
+#      （`children: [if (x) const A(),]`，Flutter 里极常见），它不是语句、
+#      lint 也不报 → 放行（这一条不加会满屏误报）；
+#   6. `do {} while (x);` 的 while 在行尾且 then 是 `;` → 命中第 3 条放行。
+_FLOW_HEAD_RE = re.compile(r'(?:^|\n)[ \t]*(?:\}\s*)?(?:else\s+)?(?:if|for|while)\s*\(')
+_ELSE_HEAD_RE = re.compile(r'(?:^|\n)[ \t]*\}?\s*else\b(?!\s*\{)(?!\s+if\b)')
+
+
+def _match_paren(code, open_pos):
+    """从 `(` 起做括号计数，返回配对 `)` 的 offset；不配对返回 -1。"""
+    depth, i, n = 0, open_pos, len(code)
+    while i < n:
+        c = code[i]
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def _next_char(code, pos):
+    """跳过空白（注释已被 mask 成空格），返回 (offset, char)；到末尾返回 (-1, '')。"""
+    i, n = pos, len(code)
+    while i < n and code[i] in ' \t\r\n':
+        i += 1
+    return (i, code[i]) if i < n else (-1, '')
+
+
+def _stmt_terminator(code, pos):
+    """then 语句的终止符 offset：跟踪 () [] {} 深度，取深度 0 处第一个 `;` 或 `,`。
+
+    返回 -1 表示没找到（宁可漏报）。
+    """
+    depth, i, n = 0, pos, len(code)
+    while i < n:
+        c = code[i]
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            if depth == 0:
+                return -1
+            depth -= 1
+        elif depth == 0 and c in ';,':
+            return i
+        i += 1
+    return -1
+
+
+def check_flow_braces(files, findings):
+    """C20 · 控制流语句跨行却没包块（curly_braces_in_flow_control_structures）。"""
+    for fp in files:
+        text = read(fp)
+        code = mask_strings_comments(text)
+        heads = [(m.end() - 1, True) for m in _FLOW_HEAD_RE.finditer(code)]
+        heads += [(m.end(), False) for m in _ELSE_HEAD_RE.finditer(code)]
+        for head, has_paren in heads:
+            if has_paren:
+                close = _match_paren(code, head)
+                if close < 0:
+                    continue
+            else:
+                close = head - 1
+            tok, ch = _next_char(code, close + 1)
+            if tok < 0 or ch in ';{':
+                continue
+            if code.count('\n', 0, tok) == code.count('\n', 0, head):
+                continue  # 与 `if` 关键字同一行 → 单行写法，lint 不报
+            end = _stmt_terminator(code, tok)
+            if end < 0 or code[end] != ';':
+                continue  # 不是以 `;` 结尾的语句（集合 if 元素等）→ 放行
+            ln = code[:tok].count('\n') + 1
+            findings.append(('HINT', 'C20', fp, ln,
+                             bi('控制流语句跨行却没包块（给 then 加花括号；'
+                                '宿主会报 curly_braces_in_flow_control_structures）',
+                                'flow-control statement spans lines without braces '
+                                '(wrap the then-part in a block; the host reports '
+                                'curly_braces_in_flow_control_structures)')))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -1750,6 +1850,7 @@ def main():
     check_deprecated_api(files, findings)
     check_local_underscore(files, findings)
     check_final_field_init(files, findings)
+    check_flow_braces(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']
