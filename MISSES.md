@@ -359,6 +359,44 @@
   `FilterChip` / `ChoiceChip` / `PopupMenuButton` = `onSelected(T)` 单值。
 - **状态**：⬜ 不补斧（能力边界，已记录反例证据与替代纪律）。
 
+### M-013 复发记录 · 2026-10-06 · fitcoach(#57 步进器) · `InkWell` 没有 `tooltip`
+
+- **第二次踩同一个坑**（首次见 M-013 正文）：`lib/widgets/rpe_stepper.dart:140` 写了
+  `InkWell(onTap: ..., tooltip: '点击手动输入', ...)` → 宿主报
+  `error - The named parameter 'tooltip' isn't defined`（宿主把 `InkWell` 的构造列为候选）。
+- **根因**：`tooltip` 是 `IconButton` / `FloatingActionButton` / `TextButton`（部分）的参数，
+  **`InkWell` 没有** —— 它是裸手势控件，不带 Material 组件那一层。正确写法是
+  **`Tooltip(message: ..., child: InkWell(...))` 包一层**。
+- **结论不变**：⬜ **仍不补斧** —— 判准需要「该参数挂在哪个控件上」的接收者类型推导，
+  与「纯文本近似」定位冲突（同 M-004 / M-011 / M-013）。且 C5 的命名参数池里
+  `tooltip` **确实存在**（来自 IconButton），靠「池子里有没有」永远抓不到。
+- **⚠️ 防复发纪律（升级版，从「先确认参数名」到「先确认控件层级」）**：
+  写回调/参数前，**先确认这个控件是不是 Material 组件** ——
+  **`InkWell` / `GestureDetector` 是裸手势层**，没有 `tooltip` / `child` 之外的组件便利参数；
+  想要 `tooltip` 就用 `Tooltip` 包一层，或直接用 `IconButton`。
+  易混补充：`InkWell` 必填 `child`（无 `child` 命名参数的写法不存在），
+  `IconButton` 才是 `icon` + 自带 `tooltip`。
+
+---
+
+### M-014 · 2026-10-06 · fitcoach（#51 动作历史）· `library` 指令没排在第一条 → **新增 C21**
+
+- **症状**：宿主 `flutter analyze` 报
+  `error - The library directive must appear before all other directives ... lib\services\exercise_history.dart:13:1 - library_directive_not_first`；
+  同轮另一个 error 一起让 `flutter test` **542 -4 大量 Failed to load**。
+- **根因**：文件头先写了 `import 'package:fitcoach/data/models.dart';`，把 `library;`
+  夹在了导入之后 —— Dart 要求 `library` 是**第一条 directive**。
+  ⚠️ 修法是**删掉这行** `library;`：本工程 93 个 lib 文件**只有这一处**用过 `library` 指令
+  （且是误加），既有风格是文件头写 `///` 注释、不写 `library`。
+- **旧九板斧为何漏**：19 项里没有任何一条管 directive 的**相对顺序**（C1 只验 import 的目标文件是否存在）。
+- **补的斧**：**C21**（v4.6 起 20 项），判据 = 行首出现 `library` 且它不是第一条
+  `library|import|export|part`。零误报设计：字符串与注释已 mask，
+  注释里写「library 放最前」不会被当指令。
+- **最小复现**：临时工程里放两个文件 ——
+  `a.dart`（`import` 在前、`library;` 在后）→ 报 `[C21] lib/a.dart:4`（行号与关键字所在行一致）；
+  `b.dart`（`library;` 在第一条）→ 不报。fitcoach 全库 147 文件复跑 **0 误报**。
+- **状态**：✅ 已补斧并反向验证通过（真阳性命中 + 行号正确 + 还原后全库 0 误报）。
+
 ---
 
 ## 新条目模板 / Template for New Entries

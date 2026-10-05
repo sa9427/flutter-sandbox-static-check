@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Flutter 沙箱静态体检（九板斧 / v4.2 起 16 项）—— 纯标准库，无第三方依赖。
+Flutter 沙箱静态体检（九板斧 / v4.6 起 20 项）—— 纯标准库，无第三方依赖。
 
 对 Flutter 工程的 lib/（v3 起默认含 test/）做文本静态检查，替代无法运行的 flutter analyze。
 用法：
@@ -1795,6 +1795,48 @@ def check_flow_braces(files, findings):
                                 'curly_braces_in_flow_control_structures)')))
 
 
+# ── C21（2026-10-06 新增）· library 指令必须在所有 directive 之前 ──────────
+#
+# 由来（宿主 `flutter analyze` 报 lib/services/exercise_history.dart:13
+# error `library_directive_not_first`）：文件头先写了 `import`，把 `library;`
+# 夹在了导入之后 —— Dart 要求 `library` 是**第一条 directive**（在
+# import / export / part 之前）。
+# ⚠️ 本工程 93 个 lib 文件里只有 1 个用过 `library;`（且是误加），**修法是删掉它**；
+# 但这类错是 ERROR 级 —— 一处就让 `flutter test` 全量 `Failed to load`
+# （看着像「爆发式报错」，实为一个根因），判据纯文本且零误报，值得单列一斧。
+#
+# 零误报设计：
+#   1. 只认行首（可有缩进）的 directive 关键字 —— 字符串与注释已被 mask 成空格，
+#      注释里写「library 放最前」不会被当成指令；
+#   2. 只比较这些指令的**相对顺序**：`library` 不是第一条 → 报错；
+#   3. 一个文件最多一个 `library`；`part of` 与它互斥，无冲突。
+_DIRECTIVE_RE = re.compile(r'(?:^|\n)[ \t]*(library|import|export|part)\b')
+
+
+def check_library_directive_order(files, findings):
+    """C21 · library 指令必须在所有 directive 之前（library_directive_not_first）。"""
+    for fp in files:
+        code = mask_strings_comments(read(fp))
+        seen = [(m.group(1), code[:m.start(1)].count('\n') + 1)
+                for m in _DIRECTIVE_RE.finditer(code)]
+        idx = -1
+        for i, (kw, _) in enumerate(seen):
+            if kw == 'library':
+                idx = i
+                break
+        if idx <= 0:
+            continue  # 没有 library，或 library 本来就在第一条 → 放行
+        ln = seen[idx][1]
+        findings.append(('ERROR', 'C21', fp, ln,
+                         bi('library 指令必须排在所有 import/export/part 之前'
+                            '（宿主报 library_directive_not_first；'
+                            '若只是想写文件头注释，直接删掉这行 library;）',
+                            'the library directive must come before all other '
+                            'directives (host reports library_directive_not_first; '
+                            'if you only meant a file-header comment, just delete '
+                            'the line)')))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -1854,6 +1896,7 @@ def main():
     check_local_underscore(files, findings)
     check_final_field_init(files, findings)
     check_flow_braces(files, findings)
+    check_library_directive_order(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']

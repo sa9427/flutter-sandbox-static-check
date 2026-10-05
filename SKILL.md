@@ -1,9 +1,9 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.5 起 19 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.6 起 20 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 19 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 20 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
   **ConsumerState 与 widget 配对**、**成员存在性**、**lint 规则表**、
@@ -68,14 +68,14 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 十九板斧检查项 / The Nineteen Checks
+## 二十板斧检查项 / The Twenty Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
 > v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、
-> v4.4 起 18 项、**v4.5 起 19 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v4.4 起 18 项、v4.5 起 19 项、**v4.6 起 20 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
 > 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, 18 since v4.4,
-> **19 since v4.5**. The name is kept so existing docs and project-memory
+> 19 since v4.5, **20 since v4.6**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -213,6 +213,27 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       （Flutter 的 `children: [if (x) const A(),]`，本工程约 56 处），不是语句、
       lint 也不报 → 放行。这条不加就满屏误报。
       A `,`-terminated body is a **collection if-element**, not a statement → pardoned.
+20. **library 指令必须在所有 directive 之前（ERROR）** /
+    **The library directive must precede all other directives**:
+    `library;` 出现在 `import` / `export` / `part` **之后** → 宿主报
+    `library_directive_not_first`（error 级，一处就让 `flutter test` 全量
+    `Failed to load`，看着像「爆发式报错」，实为一个根因）。
+    A `library;` that appears **after** an `import` / `export` / `part` triggers
+    `library_directive_not_first` (error level — a single occurrence fails every
+    test file with `Failed to load`).
+    - **v4.6 新增**（起因 M-014：宿主 `analyze` 报
+      `lib/services/exercise_history.dart:13` —— 文件头先写了 `import`，
+      把 `library;` 夹在了导入之后）。
+      **Added in v4.6** (M-014: the host flagged `lib/services/exercise_history.dart:13`).
+    - ⚠️ **本工程几乎不用 `library` 指令**（93 个 lib 文件里只有那 1 处，且是误加），
+      正确修法通常是**直接删掉这行**（想写文件头说明就用 `///` 注释，
+      本工程既有风格如此）—— 不要把 `import` 挪到 `library` 后面去凑。
+      This project barely uses `library` — the fix is usually to **delete the line**
+      (use a `///` header comment instead, as the rest of the project does);
+      do not shuffle imports around it.
+    - 只认**行首**关键字，且字符串与注释已 mask → 注释里写「library 放最前」不误报。
+      Only line-leading keywords count, with strings/comments masked → no false
+      positives from prose about `library`.
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 
