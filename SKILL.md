@@ -242,6 +242,15 @@ loosening de-noising is the #1 cause of closed escapes silently returning.
   dropping a declaration line (`final power = ...`) leaves undefined references.
   Pure-text analysis cannot resolve local scope reliably (see M-004), **so the rule is**:
   re-read the ~10 lines around every edit.
+- **本工具查不到的另一类 —— flow promotion 后的多余 `!`**：同一个表达式里写了
+  `x != null` 之后，再写 `x!` 会报 `unnecessary_non_null_assertion`（局部变量已被
+  提升为非空）。**纪律：写了 `x != null` 就别再对 `x` 用 `!`**，跨行写法尤其容易
+  顺手加上。判准需要 flow analysis（字段 / 局部 / `final` / 闭包四种情况各不相同），
+  纯文本原型实测双向不达标（见 `MISSES.md` **M-011**），**故不补斧**。
+  Another class this tool cannot catch: a redundant `!` after `x != null` in the same
+  expression (`unnecessary_non_null_assertion`) — locals get promoted.
+  **Rule: once you write `x != null`, do not write `x!`.** Deciding this correctly needs
+  flow analysis; the pure-text prototype failed in both directions (see M-011), so no axe.
 - 每次改完 Dart 代码跑一遍，确认 `RESULT: 工程干净 ✅` 后再提交。
   Run it after every Dart edit; only commit once `RESULT: 工程干净 ✅` is confirmed.
 - **宿主复验报了问题就走反哺流程**（见上一节 `MISSES.md`）：先判断是不是漏报，

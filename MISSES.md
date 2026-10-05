@@ -283,6 +283,36 @@
 
 ---
 
+### M-011 · 2026-10-05 · fitcoach(#50 F5 导出提醒) · `x != null && ... x!` 冗余 `!` → **不补斧（能力边界）**
+
+- **症状**：宿主 `flutter analyze` 报
+  `warning - The '!' will have no effect because the receiver can't be null ... `
+  `lib/services/export_reminder.dart:126:24 - unnecessary_non_null_assertion`。
+- **根因**：同一逻辑表达式里先写了 `daysSinceExport != null`，分析器已把该**局部变量**
+  提升（promotion）为非空，后面再写 `daysSinceExport!` 就是多余的。
+- **旧九板斧为何漏**：18 项里没有一条管「flow promotion 后的多余 `!`」——
+  它属**类型流分析**类，不是 import / 命名 / 括号 / 语义完整性。
+- **归类**：⬜ **不补斧** —— 属**能力边界**，详见下方实验结论（与 M-004 同类）。
+- **实验（已做，可复盘，别重复造）**：原型 C20「`x != null` 后 200 字符内出现 `x!`」
+  （宁可漏报策略：只报**本文件行首声明过的局部变量**，排除类字段）。
+  结果**两个方向都不达标**：
+  ① **误报**：`features/onboarding/equipment_collection_page.dart` 的 `_occupation`
+  命中 2 条 —— 它是 **State 的字段**（`late final ... _occupation = ...`，带等号，
+  原型把它误收进"局部变量"集合）→ 字段**不会**被 promotion，`!` 是合法的；
+  ② **漏报**：把真阳性写法（跨三行的 `daysSinceExport != null &&\n  daysSinceExport!`）
+  喂给原型 → **0 命中**（原型正则的类型段与名字段之间缺边界约束，名字被截成
+  `aysSinceExport`）—— 正则写错两次，说明**这类规则极易自欺**。
+- **结论**：判准需要 ①字段 / 局部变量区分 ②`final` / `late` 修饰判定
+  ③`private final` 字段也会 promotion ④闭包内 promotion 失效 ——
+  等价于实现 flow analysis，与「纯文本近似」定位冲突（同 M-004）。
+  **且代价极低**：这是 **warning 级**，不阻断编译，宿主 `flutter analyze` 第一轮必报。
+- **改为人工纪律（已写进 SKILL.md）**：
+  **同一个表达式里写了 `x != null` 之后，不要再对 `x` 用 `!`**（局部变量会被自动提升）；
+  跨行写法尤其容易顺手加上 `!`。字段（`_x`）不受此限。
+- **状态**：⬜ 不补斧（能力边界，已记录实验证据与替代纪律）。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown
