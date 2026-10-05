@@ -277,6 +277,19 @@ loosening de-noising is the #1 cause of closed escapes silently returning.
   expression (`unnecessary_non_null_assertion`) — locals get promoted.
   **Rule: once you write `x != null`, do not write `x!`.** Deciding this correctly needs
   flow analysis; the pure-text prototype failed in both directions (see M-011), so no axe.
+- **本工具查不到的第三类 —— 类型赋值不兼容（`argument_type_not_assignable`）**：
+  C14 只判「某个类型上有没有这个成员」，**不判两个类型之间能否互相赋值**。
+  实测踩坑（2026-10-05）：测试里写 `const prior = [0, 600, 600, 600];` 再传给
+  `List<double>` 参数 → `const` 声明**没有上下文可推断**，Dart 把它定成 `List<int>`
+  → 编译硬错（39 个测试文件 Failed to load）。
+  **纪律：往 `List<double>` / `Set<double>` 传字面量时显式写 `<double>[...]` 或带 `.0`**，
+  `const` 声明尤其危险（非 const 的实参有上下文类型推断，通常没问题）。
+  A third class this tool cannot catch: type-assignment mismatches
+  (`argument_type_not_assignable`). C14 only checks whether a member exists on a type,
+  not whether one type is assignable to another. Real case: `const prior = [0, 600]`
+  has no context to infer from → Dart types it `List<int>` → hard error when passed to a
+  `List<double>` parameter. **Rule: write `<double>[...]` or use `.0` literals**, especially
+  in `const` declarations (non-const arguments get context inference).
 - 每次改完 Dart 代码跑一遍，确认 `RESULT: 工程干净 ✅` 后再提交。
   Run it after every Dart edit; only commit once `RESULT: 工程干净 ✅` is confirmed.
 - **宿主复验报了问题就走反哺流程**（见上一节 `MISSES.md`）：先判断是不是漏报，
