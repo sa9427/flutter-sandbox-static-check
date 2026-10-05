@@ -1,9 +1,9 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.6 起 20 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.7 起 21 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 20 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 21 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
   **ConsumerState 与 widget 配对**、**成员存在性**、**lint 规则表**、
@@ -68,14 +68,14 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 二十板斧检查项 / The Twenty Checks
+## 二十一板斧检查项 / The Twenty-One Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
 > v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、
-> v4.4 起 18 项、v4.5 起 19 项、**v4.6 起 20 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、**v4.7 起 21 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
 > 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, 18 since v4.4,
-> 19 since v4.5, **20 since v4.6**. The name is kept so existing docs and project-memory
+> 19 since v4.5, 20 since v4.6, **21 since v4.7**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -234,6 +234,27 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
     - 只认**行首**关键字，且字符串与注释已 mask → 注释里写「library 放最前」不误报。
       Only line-leading keywords count, with strings/comments masked → no false
       positives from prose about `library`.
+21. **test/ 里用 `find.byType(<手势层/按钮>)` 喂给需单一目标的操作（HINT）** /
+    **`find.byType` on gesture/button widgets feeding a single-target op**:
+    `tester.tap(find.byType(InkWell))` / `tester.getSize(find.byType(InkWell))`
+    —— `IconButton` / `TextButton` 内部本身就是 `InkWell`，一个步进器就能命中 3 个，
+    运行时抛 `Bad state: Too many elements`（`Iterable.single`）。
+    `IconButton`/`TextButton` embed an `InkWell`, so a single stepper matches 3 →
+    runtime `Bad state: Too many elements`.
+    - **v4.7 新增**（起因 M-015：宿主 `flutter test` 报 TC-B-USE-05/06 两条失败，
+      都是同一个根因 —— `find.byType(InkWell)` 歧义）。
+      **Added in v4.7** (M-015: the host's `flutter test` failed TC-B-USE-05/06,
+      both from the same root cause).
+    - 正确修法 = 给目标 widget 加 `static const Key` 常量，测试用 `find.byKey`；
+      临时可用 `.first` / `descendant` 消歧（本斧会放行）。
+      Fix = add a `static const Key` to the widget and use `find.byKey`;
+      `.first` / `descendant` also pass the check.
+    - 只对 `InkWell / InkResponse / GestureDetector / IconButton / TextButton /
+      ElevatedButton / OutlinedButton / FloatingActionButton / Icon` 报警
+      （`Text` / `Container` 之类太常见，报了就是噪声）；整行注释跳过 →
+      「别用 find.byType(InkWell)」这类防复发注释不会被自己报出来。
+      Only gesture/button types are flagged; full-line comments are skipped so
+      "do not use find.byType(InkWell)" notes do not self-report.
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 

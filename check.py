@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Flutter 沙箱静态体检（九板斧 / v4.6 起 20 项）—— 纯标准库，无第三方依赖。
+Flutter 沙箱静态体检（九板斧 / v4.7 起 21 项）—— 纯标准库，无第三方依赖。
 
 对 Flutter 工程的 lib/（v3 起默认含 test/）做文本静态检查，替代无法运行的 flutter analyze。
 用法：
@@ -1837,6 +1837,54 @@ def check_library_directive_order(files, findings):
                             'the line)')))
 
 
+# C22 · test/ 里用 find.byType 定位「手势层 / 按钮」并喂给需要单一目标的控制器操作
+# （tap / getSize / getCenter / …）——IconButton/TextButton 内部本身就是 InkWell，
+# 一个步进器里就能命中 3 个 → 运行时 Bad state: Too many elements。
+_FINDER_BYTYPE_RE = re.compile(r'find\.byType\((\w+)\)')
+_AMBIG_WIDGETS = {
+    'InkWell', 'InkResponse', 'GestureDetector', 'IconButton', 'TextButton',
+    'ElevatedButton', 'OutlinedButton', 'FloatingActionButton', 'Icon',
+}
+_SINGLE_TARGET_OPS = (
+    '.tap(', 'tester.tap(', 'getSize(', 'getCenter(', 'getTopLeft(',
+    'getBottomRight(', 'press(', 'longPress(', 'drag(', 'dragFrom(',
+    'scrollUntilVisible(',
+)
+
+
+def check_ambiguous_finder(files, findings):
+    """C22 · test/ 的 find.byType(<手势层/按钮>) 用于需单一目标的操作 → 歧义风险。"""
+    for fp in files:
+        norm = fp.replace('\\', '/')
+        if '/test/' not in norm and not norm.endswith('_test.dart'):
+            continue
+        lines = read(fp).split('\n')
+        for i, raw in enumerate(lines, 1):
+            # 整行注释（含「别用 find.byType(InkWell)」这类说明）不参与匹配，
+            # 否则写注释防复发反而会被自己报出来。
+            if raw.strip().startswith('//') or raw.strip().startswith('*'):
+                continue
+            m = _FINDER_BYTYPE_RE.search(raw)
+            if not m or m.group(1) not in _AMBIG_WIDGETS:
+                continue
+            if not any(op in raw for op in _SINGLE_TARGET_OPS):
+                continue
+            # .first / .at(n) / byKey / descendant 已显式消歧 → 放行
+            if re.search(r'\.first\b|\.at\(|byKey|descendant\(|ancestor\(', raw):
+                continue
+            findings.append(('HINT', 'C22', fp, i,
+                             bi('find.byType(%s) 用于需单一目标的操作（tap/getSize/…）：'
+                                '%s 在 widget 树里通常不止一个（如 IconButton 内部就是 '
+                                'InkWell），运行时会抛 Bad state: Too many elements；'
+                                '改用 find.byKey / .first / descendant 定位'
+                                % (m.group(1), m.group(1)),
+                                'find.byType(%s) feeds a single-target operation '
+                                '(tap/getSize/...): %s usually occurs more than once in '
+                                'the tree (e.g. IconButton embeds an InkWell) → runtime '
+                                '"Bad state: Too many elements"; use find.byKey / .first '
+                                '/ descendant instead' % (m.group(1), m.group(1)))))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -1897,6 +1945,7 @@ def main():
     check_final_field_init(files, findings)
     check_flow_braces(files, findings)
     check_library_directive_order(files, findings)
+    check_ambiguous_finder(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']

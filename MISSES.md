@@ -399,6 +399,36 @@
 
 ---
 
+### M-015 · 2026-10-06 · fitcoach（#57 步进器）· 测试里 `find.byType(InkWell)` 歧义 → **新增 C22**
+
+- **症状**：宿主 `flutter test -r failures-only` 报 **两条**失败，同一个根因 ——
+  ```
+  TC-B-USE-05  Bad state: Too many elements        (Iterable.single ← getSize)
+  TC-B-USE-06  The finder "Found 3 widgets with type "InkWell"" ... ambiguously
+               found multiple matching widgets. The "tap()" method needs a single target.
+  ```
+- **根因**：一个 `RpeStepper` 里 **− / 数值 / + 三处点击区在 widget 树里都是 `InkWell`**
+  （`IconButton` 内部本身就嵌 `InkWell`）→ `find.byType(InkWell)` 命中 3 个，
+  而 `tap` / `getSize` 都要求**唯一**目标。
+- **旧九板斧为何漏**：20 项里没有任何一条管 **test 侧的 finder 用法**（此前补的斧全在 lib 侧语法/引用）。
+- **补的斧**：**C22**（v4.7 起 21 项，HINT 级）：`test/` 下 `find.byType(X)` 且
+  `X ∈ {InkWell, InkResponse, GestureDetector, IconButton, TextButton, ElevatedButton,
+  OutlinedButton, FloatingActionButton, Icon}` 且同行出现需单一目标的操作
+  （`tap` / `getSize` / `getCenter` / `press` / `drag` …）→ 报警。
+  零误报设计：`.first` / `.at(` / `byKey` / `descendant(` 视为已消歧 → 放行；
+  **整行注释跳过**（否则「别用 find.byType(InkWell)」这类防复发注释会被自己报出来）；
+  `Text` / `Container` 之类太常见，不纳入白名单。
+- **最小复现**：临时工程 `test/x_test.dart` ——
+  `await tester.tap(find.byType(InkWell));` → 报 `[C22] test/x_test.dart:6`；
+  `tester.getSize(find.byType(GestureDetector))` → 报第 7 行；
+  `find.byKey(...)` / `.first` / 注释行 → **均不报**。fitcoach 全库 154 文件复跑 **0 误报**。
+- **人工纪律（补斧之外仍要遵守）**：给需要被测试点击/测量的 widget 加
+  `static const Key` 常量（本例 = `RpeStepper.valueKey`），测试一律 `find.byKey`；
+  不要图省事写 `find.byType(InkWell)`。
+- **状态**：✅ 已补斧并反向验证通过（真阳性 2 条命中 + 3 条放行正确 + 全库 0 误报）。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown
