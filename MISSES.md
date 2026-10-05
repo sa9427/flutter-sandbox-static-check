@@ -336,6 +336,31 @@
 
 ---
 
+### M-013 · 2026-10-05 · fitcoach(#54 容量预警卡) · 框架控件的命名参数写错 → **不补斧（能力边界）**
+
+- **症状**：宿主 `flutter analyze` 报
+  `error - The named parameter 'onSelected' isn't defined ... lib\widgets\volume_ceiling_card.dart:89:15 - undefined_named_parameter`；
+  同根因让 `flutter test` 里 **39 个文件 Failed to load**（ERROR 级，阻断编译）。
+- **根因**：`SegmentedButton` 的选择回调是 **`onSelectionChanged`**（回传 `Set<T>`，单选取 `.first`），
+  不是 `onSelected`。我按 `FilterChip` 的写法照抄了签名。
+- **旧九板斧为何漏**：C5（命名参数拼写）的池子只收集**项目内**定义的命名参数（904 个），
+  不解析 Flutter SDK 源码 —— 这是设计前提（本工具要能在**无 SDK** 的环境跑）。
+- **归类**：⬜ **不补斧** —— 属**能力边界**。
+- **⚠️ 关键证据：不能简单加一条「`onSelected` 禁用」**（差点就这么干）：
+  全库 **9 处合法** `onSelected` —— `FilterChip` / `ChoiceChip` / `PopupMenuButton`
+  都**确实有**这个参数（`exercise_edit_page.dart:134/149`、`exercise_library_page.dart`
+  6 处、`create_plan_page.dart:257/271`）。**只有 `SegmentedButton` 例外。**
+  判准需要「回调挂在哪个控件上」的接收者类型推导 —— 与「纯文本近似」的定位冲突
+  （同 M-004 / M-011）。硬加规则 = 9 个误报换 1 个真阳性，血亏。
+- **代价评估**：ERROR 级，`flutter analyze` / `flutter test` **第一轮必报**，不会拖到运行时。
+- **改为人工纪律**：
+  **写控件回调前先确认该控件的参数名，不要从另一个控件复制签名。** 易混的一组：
+  `SegmentedButton` = `onSelectionChanged(Set<T>)` 取 `.first`；
+  `FilterChip` / `ChoiceChip` / `PopupMenuButton` = `onSelected(T)` 单值。
+- **状态**：⬜ 不补斧（能力边界，已记录反例证据与替代纪律）。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown
