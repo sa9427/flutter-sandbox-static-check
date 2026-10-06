@@ -579,6 +579,56 @@
   fitcoach 全库复跑**工程干净**。
 - **影响面**：与 M-013（框架控件命名参数写错 → 不补斧）**无交集**（那类是「少了参数」，
   C6 本来就抓不到）；本次只加了两个当前工程内**无人使用**的参数名。
+
+### M-021 · 2026-10-06 · fitcoach(#63) · **C25 只查直接 import → 漏掉传递链**，宿主当天就报了 → **C25 升级为传递闭包 + 条件导入感知**
+
+> ⚠️ **本条是真漏报，且是「斧头刚加上当天就被打脸」** —— C25（M-019）加完不到
+> 一小时，宿主 `flutter test` 就报 `+684 -2`，报错是从 `package:web` 自己源码里
+> 冒出来的满屏 `toJS` / `jsify` 未定义。**加斧时没想过「间接」这条路径。**
+
+- **症状 Symptom**：`flutter test` → `+684 -2: Some tests failed.`，错误形如
+  ```
+  web-1.1.1/lib/src/helpers/extensions.dart:39:69: Error: The getter 'toJS' isn't defined for the type 'num'.
+  web-1.1.1/lib/src/helpers/http.dart:252:62: Error: The method 'jsify' isn't defined for the type 'Object'.
+  ```
+  `flutter analyze` 却**只报 2 条 info**（与本次改动无关）→ 极具迷惑性：
+  「analyze 全绿、test 崩在第三方包里」。
+- **根因 Root cause**：`test/widget_test.dart` 的 import 闭包里有一条
+  **`test/widget_test.dart → app.dart → equipment_collection_page.dart →
+  home_page.dart → export_action.dart → file_download.dart → dart:js_interop`**。
+  VM 没有 `dart:js_interop` → 该链上的**入口测试文件**（而不是真凶）Failed to load。
+  `-2` = `widget_test.dart` 里恰好 2 条测试 —— 与「整片加载失败」完全吻合。
+- **旧 C25 为何漏 Why missed**：v4.10 的 C25 **只匹配本文件的 import 行**。
+  而 `file_download.dart` 在 `lib/features/**`（**放行区**），`widget_test.dart`
+  自己**一行 Web 库都没 import** → 两条判定都不命中。
+  👉 **教训：分层规则（L2/L3 放行）与「VM 可达性」是两回事** ——
+  放行区里的文件**可以被 test 传递引用到**，那时候它就是 VM 可达的。
+- **补的斧 Fix**：C25 增 **B 判定（传递）** —— 从每个 `test/**` 文件出发做
+  import/export 闭包，摸到 Web-only 库就报 ERROR 并**打印整条链**。
+  两个必须做对的细节：
+  1. **条件导入感知**：`export 'x_stub.dart' if (dart.library.js_interop)
+     'x_web.dart'` 的 Web 分支在 VM 下**不参与编译** → **不算命中**。
+     否则正解修法会被一直误报（逼人把斧头关掉，比漏报更糟）。
+     守卫属 `{js_interop, js_interop_unsafe, html, js, js_util, ui_web}` 才算 Web 分支。
+  2. **多行 import/export 先并在一行**再解析 —— 条件导入常换行写，不合并就漏判。
+- **最小复现 Repro**：
+  `lib/features/x.dart` 写 `import 'package:web/web.dart';` +
+  `test/t_test.dart` 写 `import 'package:<pkg>/features/x.dart';` → C25 ERROR（带链）。
+- **反向验证 Reverse-validation**（四条，全过）：
+  ① 传递链命中 → ERROR；
+  ② 改成条件导入（Web 守卫）→ **放行**（0 命中）；
+  ③ 守卫写成 `dart.library.io` → **仍命中**（不能把「放行」写宽）；
+  ④ **在 fitcoach 真工程上临时把 `file_download.dart` 改回直接 import** → 命中
+  `test/widget_test.dart` 并打印真链 → 还原后全库 178 文件**工程干净**。
+  （④ 是台账硬要求：改过降噪/放行规则，必须**回看重跑复现**。）
+- **工程侧正解**（记录给下次遇到同类问题直接用）：**条件导入拆分** ——
+  `file_download.dart`（`export '…_stub.dart' if (dart.library.js_interop) '…_web.dart'`）
+  + `…_stub.dart`（非 Web 恒 `false`，让 L3 降级）+ `…_web.dart`（`package:web` 实现）。
+  守卫用 `dart.library.js_interop` —— Flutter 3.44 SDK 自己的条件导入全部用这个
+  （`packages/flutter/lib/src/foundation/error_dumper.dart:5`），**不是**老教程的 `dart.library.html`。
+- **状态**：✅ 已补斧并反向验证通过（2026-10-06，v4.11；项数仍 24）。
+- **附带教训（写给以后的我）**：宿主报错太长复制不完时，先给用户一条
+  `flutter test --reporter expanded > test.log 2>&1` 让它落盘，别让用户手抄屏幕。
 - **状态**：✅ 已修改白名单并反向验证通过（2026-10-06）。
 
 ---

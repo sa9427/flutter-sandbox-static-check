@@ -1,7 +1,7 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.10 起 24 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.11 起 24 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
   flutter analyze，做 24 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
@@ -73,11 +73,11 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
 > v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、
 > v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、v4.7 起 21 项、v4.8 起 22 项、
-> v4.9 起 23 项、**v4.10 起 24 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v4.9 起 23 项、v4.10 起 24 项、**v4.11 把 C25 升级为传递闭包（项数不变）**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
 > 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, 18 since v4.4,
 > 19 since v4.5, 20 since v4.6, 21 since v4.7, 22 since v4.8, 23 since v4.9,
-> **24 since v4.10**. The name is kept so existing docs and project-memory
+> **24 since v4.10** (v4.11 = C25 transitive upgrade, count unchanged). The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -303,16 +303,44 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
     `test/` makes the whole `flutter test` run fail to load.
     - **v4.10 新增**（起因 M-019：#63 导出文件下载引入 `package:web`，
       它是全工程唯一允许用 Web-only 库的地方；这条约束此前只写在文件头注释里，
-      没有任何常驻信号守着）。
-      **Added in v4.10** (M-019).
+      没有任何常驻信号守着）。**Added in v4.10** (M-019).
+    - ⚠️⚠️ **v4.11 升级为「传递闭包 + 条件导入感知」**（M-021，**当天就漏了**）：
+      v4.10 只查**直接** import，而真实形态是传递链 ——
+      `test/widget_test.dart → app.dart → equipment_collection_page.dart →
+      home_page.dart → export_action.dart → file_download.dart → dart:js_interop`，
+      整整一个测试文件 Failed to load，报错是满屏 `toJS` / `jsify` 未定义、
+      从 `package:web` **自己的源码**里冒出来。**只查直接那条根本拦不住。**
+      v4.10 also missed it: only *direct* imports were checked, but the real
+      shape is a transitive chain; a whole test file failed to load with a wall
+      of `toJS`/`jsify` errors reported inside `package:web`'s own sources.
     - 判定范围：`test/**` 与 `lib/core/**`、`lib/services/**`（L1）→ **ERROR**；
       `lib/features/**`、`lib/widgets/**`、`lib/data/**` 等 L2/L3 → **放行**。
+    - **两条判定**：A 直接命中（文件自己 import）；B **从 `test/` 出发沿
+      import/export 的传递闭包**（B 才是真凶形态）。
+      Two checks: A direct import; B the transitive import/export closure
+      starting from `test/` (B is the shape that actually bites).
+    - 🧠 **必须感知条件导入**：`export 'x_stub.dart'
+      if (dart.library.js_interop) 'x_web.dart'` 的 Web 分支在 VM 下
+      **根本不参与编译** → **不算命中**（否则修好了还一直误报，逼人把斧头关掉）。
+      守卫属 `{js_interop, js_interop_unsafe, html, js, js_util, ui_web}` 才算
+      Web 分支；`dart.library.io` 之类照常命中。
+      Must understand conditional imports: the branch guarded by a web
+      `dart.library.*` never compiles on the VM, so it must not be reported.
+    - 多行 import/export **先并在一行**再解析（条件导入常换行写，不合并 = 漏判；
+      这条假阴性比误报更危险）。
+    - 正解修法（也是 Flutter SDK 自己的惯例，见
+      `packages/flutter/lib/src/foundation/error_dumper.dart:5`）= **条件导入拆分**：
+      `file_download.dart`（`export '…stub.dart' if (dart.library.js_interop)
+      '…web.dart'`）+ `…_stub.dart`（非 Web 恒返回 false 让 L3 降级）
+      + `…_web.dart`（`package:web` 实现）。⛔ 守卫用 `dart.library.js_interop`
+      **不是**老教程里的 `dart.library.html`。
     - ⚠️ 与 lint `avoid_web_libraries_in_flutter`（`flutter_lints` 6.0.0 已启用）
       的分工：**lint 管「不许用旧的 dart:html 系列」**（全工程），
       **本斧管「新的 package:web 不许进 VM 可达位置」**（分层纯度）。
       ⛔ `dart:html` 仍然是红灯 —— 官方替代只有 `package:web`。
-    - 修法：把 Web-only 调用**收口进一个 L2/L3 适配文件**，L1 只留纯函数
-      （如导出文件名），测试只测 L1 那一半。
+    - 反向验证（四条，v4.11 全跑过）：① 传递链命中 → ERROR；
+      ② 条件导入（Web 守卫）→ **放行**；③ 守卫写成 `dart.library.io` → 命中；
+      ④ **在真工程上临时改回 bug**，确认能抓住再还原。
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 

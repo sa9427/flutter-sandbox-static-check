@@ -2023,12 +2023,97 @@ def check_since_literal_fallback(files, findings):
 # 但那条是运行时、这条是编译期）。
 # （2026-10-06 #63 导出文件下载引入 `package:web` 时发现 —— 该约束此前只写在
 #   文件头注释里，没有任何常驻信号守着。登记 M-019。）
+# （2026-10-06 **当天就漏了**：第一版只查**直接** import，而真凶是传递链 ——
+#   `test/widget_test.dart → app.dart → … → export_action.dart → file_download.dart
+#    → dart:js_interop`，整片 Failed to load。登记 M-021，改为**传递闭包**，
+#   且必须**感知条件导入**（`if (dart.library.js_interop)` 的 Web 分支
+#   在 VM 下不参与编译，不算命中）。）
 _WEB_ONLY_IMPORT_RE = re.compile(
-    r"^\s*import\s+['\"](package:web|dart:(?:js_interop|js_interop_unsafe|html|js|js_util))")
+    r"^\s*(?:import|export)\s+['\"](package:web|dart:(?:js_interop|js_interop_unsafe|html|js|js_util))")
+
+# 单条 import/export 指令（**含条件导入**）：
+#   export 'file_download_stub.dart' if (dart.library.js_interop) 'file_download_web.dart';
+_DIRECTIVE_RE = re.compile(
+    r"^\s*(?:import|export)\s+['\"]([^'\"]+)['\"]"
+    r"(?:\s+if\s*\(\s*dart\.library\.(\w+)\s*\)\s*['\"]([^'\"]+)['\"])?")
+
+# 守卫为这些 = 当前目标是 Web → 该分支**不参与 VM 编译**。
+_WEB_GUARDS = {'js_interop', 'js_interop_unsafe', 'html', 'js', 'js_util', 'ui_web'}
+
+_WEB_URI_RE = re.compile(
+    r'^(package:web|dart:(?:js_interop|js_interop_unsafe|html|js|js_util))(/|$)')
+
+
+def _directives(text):
+    """返回 [(行号, 指令全文)] —— 多行 import/export **先并在一行**再解析。
+
+    条件导入经常换行写；不合并就会漏判（假阴性比误报更危险，这条尤其）。
+    """
+    out, buf, start = [], '', 0
+    for i, ln in enumerate(text.split('\n'), 1):
+        s = ln.strip()
+        if not buf:
+            if s.startswith('import ') or s.startswith('export '):
+                buf, start = s, i
+                if buf.endswith(';'):
+                    out.append((start, buf))
+                    buf = ''
+        else:
+            buf += ' ' + s
+            if buf.endswith(';'):
+                out.append((start, buf))
+                buf = ''
+    return out
+
+
+def _resolve_uri(uri, from_file, pkg, root):
+    """把 import 的 URI 解析成磁盘路径；不是本工程的文件返回 None。"""
+    if uri.startswith('package:' + pkg + '/'):
+        return os.path.join(root, 'lib', uri[len('package:' + pkg + '/'):])
+    if uri.startswith('package:') or uri.startswith('dart:'):
+        return None
+    return os.path.join(os.path.dirname(from_file), uri)  # 相对导入
+
+
+def _vm_deps(fp, pkg, root):
+    """返回 (本工程依赖, Web-only URI 列表) —— 只算 **VM 下真会编译进来** 的。
+
+    条件导入的两个分支按守卫取舍：`if (dart.library.js_interop)` 的那条
+    只在 Web 下编译，VM 下**不存在**（这正是 `file_download.dart` 的修法）。
+    """
+    deps, web = [], []
+    for _i, d in _directives(read(fp)):
+        m = _DIRECTIVE_RE.match(d)
+        if not m:
+            continue
+        for uri, guard in ((m.group(1), None), (m.group(3), m.group(2))):
+            if not uri:
+                continue
+            if _WEB_URI_RE.match(uri):
+                if guard is None or guard not in _WEB_GUARDS:
+                    web.append(uri)  # 无条件 / 非 Web 守卫 → VM 真会编译 → 命中
+                continue
+            if guard is not None and guard in _WEB_GUARDS:
+                continue  # Web 专属分支 → VM 下不编译
+            p = _resolve_uri(uri, fp, pkg, root)
+            if p and os.path.exists(p):
+                deps.append(p.replace('\\', '/'))
+    return deps, web
 
 
 def check_web_only_imports(files, findings):
-    """C25 · Web-only 库出现在 `test/` 或 L1 → 整片测试 Failed to load（ERROR）。"""
+    """C25 · Web-only 库出现在 `test/` 或 L1 → 整片测试 Failed to load（ERROR）。
+
+    两条判定：
+      A **直接**：`test/` 或 L1 文件自己 import 了 Web-only 库。
+      B **传递**（M-021）：从 `test/` 出发沿 import/export 闭包能摸到 Web-only 库
+        —— 这才是 2026-10-06 的实际形态，只查直接那条根本拦不住。
+    """
+    root = project_root_ref
+    pkg = read_pubspec_name(root) or ''
+    test_files = [f for f in files if '/test/' in f.replace('\\', '/')]
+
+    # ── A 直接命中 ──────────────────────────────────────────────
     for fp in files:
         norm = fp.replace('\\', '/')
         # ⚠️ zone 用**单语**两个变量：它要嵌进 bi() 的双语模板里，
@@ -2060,6 +2145,44 @@ def check_web_only_imports(files, findings):
                                 'Fix = confine web-only calls to a single L2/L3 '
                                 'adapter and keep L1 pure/testable.'
                                 % (m.group(1), zone_en))))
+
+    # ── B 传递命中（从 test/ 出发的 import/export 闭包）────────────
+    for tf in test_files:
+        seen, path = {tf.replace('\\', '/')}, {tf.replace('\\', '/'): [tf]}
+        queue = [tf.replace('\\', '/')]
+        while queue:
+            n = queue.pop(0)
+            deps, web = _vm_deps(n, pkg, root)
+            if web:
+                chain = ' → '.join(path[n] + [web[0]])
+                findings.append(('ERROR', 'C25', tf, 0,
+                                 bi('本测试文件**间接**引到了 Web-only 库 `%s`：\n'
+                                    '    %s\n'
+                                    'VM 下 `dart:js_interop` 不可用 → 本文件（而不是真凶）'
+                                    '会 **Failed to load**，报错是满屏 `toJS` / `jsify` '
+                                    '未定义、从 `package:web` **自己的源码**里冒出来。\n'
+                                    '修法 = 在链上第一个平台相关文件处做**条件导入拆分**'
+                                    '（`export \'x_stub.dart\' if (dart.library.js_interop) '
+                                    '\'x_web.dart\'`），让 Web 分支在 VM 下压根不编译。'
+                                    % (web[0], chain),
+                                    'this test file **indirectly** reaches the web-only '
+                                    'library `%s`:\n    %s\n'
+                                    '`dart:js_interop` is unavailable on the VM → this '
+                                    'file (not the real culprit) fails to load, with a '
+                                    'wall of `toJS` / `jsify` errors reported inside '
+                                    '`package:web`\'s own sources.\n'
+                                    'Fix = split the first platform-dependent file on '
+                                    'the chain with a **conditional export** '
+                                    '(`export \'x_stub.dart\' if (dart.library.js_interop) '
+                                    '\'x_web.dart\'`) so the web branch never compiles '
+                                    'on the VM.' % (web[0], chain))))
+                break
+            for d in deps:
+                if d in seen:
+                    continue
+                seen.add(d)
+                path[d] = path[n] + [d]
+                queue.append(d)
 
 
 def main():
