@@ -351,6 +351,25 @@ loosening de-noising is the #1 cause of closed escapes silently returning.
   has no context to infer from → Dart types it `List<int>` → hard error when passed to a
   `List<double>` parameter. **Rule: write `<double>[...]` or use `.0` literals**, especially
   in `const` declarations (non-const arguments get context inference).
+- **本工具查不到的第四类 —— 测试里的「时间炸弹」（硬编码绝对日期 × 真实时钟）**：
+  test 里把日期写成 `DateTime(2026, 10, 5, 10)` 这种**离今天很近**的绝对值时，
+  写当天全绿；但只要被测代码内部读了 `DateTime.now()`（如草稿 TTL 24h 的过期判定、
+  「近 N 天」统计），隔天 `now - savedAt` 越过阈值 → 断言翻转，**必红且看不出原因**。
+  实测（fitcoach 2026-10-07）：`session_draft_test` 的 `sample()` 默认 `savedAt`
+  写死 2026-10-05 10:00，而 `DraftPref.load()` 不传 `now` 就取真实时钟 → 27h > TTL
+  → 判过期顺手清除 → `expect(back, isNotNull)` 拿到 null。
+  **纪律：测试用到的日期要么注入时钟（`now:` / `until:` 参数），要么取 `DateTime.now()`
+  的相对值（`now.subtract(...)`）；绝不写「离今天 ±若干天」的绝对日期。**
+  ⚠️ **不补斧**：全库 159 处硬编码日期里绝大多数是注入时钟或纯标签（如 `monthKeyOf`），
+  判准需要「该日期是否与真实时钟发生比较」的数据流分析 —— 纯文本做不到，
+  补了就是纯噪声（见 `MISSES.md` **M-017**）。
+  A fourth class this tool cannot catch: **time bombs in tests** — a hardcoded absolute
+  date *close to today* passes on the day it is written, then flips once the wall clock
+  crosses the threshold inside the code under test (24h draft TTL, "last N days" stats).
+  **Rule: inject the clock (`now:` / `until:`) or derive from `DateTime.now()`; never
+  hardcode a date within days of today.** No axe: 159 hardcoded dates in the corpus are
+  mostly injected clocks or pure labels; telling them apart needs data-flow analysis
+  (see M-017), so a check would be pure noise.
 - 每次改完 Dart 代码跑一遍，确认 `RESULT: 工程干净 ✅` 后再提交。
   Run it after every Dart edit; only commit once `RESULT: 工程干净 ✅` is confirmed.
 - **宿主复验报了问题就走反哺流程**（见上一节 `MISSES.md`）：先判断是不是漏报，
