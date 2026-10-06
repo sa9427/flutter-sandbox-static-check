@@ -1,9 +1,9 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.8 起 22 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.9 起 23 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 22 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 23 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
   **ConsumerState 与 widget 配对**、**成员存在性**、**lint 规则表**、
@@ -72,10 +72,10 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
 > v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、
-> v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、v4.7 起 21 项、**v4.8 起 22 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、v4.7 起 21 项、v4.8 起 22 项、**v4.9 起 23 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
 > 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, 18 since v4.4,
-> 19 since v4.5, 20 since v4.6, 21 since v4.7, **22 since v4.8**. The name is kept so existing docs and project-memory
+> 19 since v4.5, 20 since v4.6, 21 since v4.7, 22 since v4.8, **23 since v4.9**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -261,6 +261,21 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       **Added in v4.8** (M-016).
     - 只查**同文件**：某个类里定义的 `static` 成员，在**另一个类的类体内**被裸名使用。
       跨文件的情形（在别的文件里裸用）已属导入/符号分析范畴，暂不覆盖。
+23. **判定参数不许被喂字面量兜底（HINT）** /
+    **"Time-since" judgement args must not be fed literal constants**:
+    `\b\w*Since\w*\s*:\s*\d+`（如 `planDeload(weeksSinceLastDeload: 0, ...)`）——
+    「距今 / 自上次」类入参必须是**真实历史值**，写死常量会让整条判定**静默失效**：
+    不报错、不崩、单测也过，只是结论永远不成立（**比编译错更危险**）。
+    A hardcoded constant makes the whole verdict silently unreachable — no error,
+    no crash, tests pass, the branch simply never fires.
+    - **v4.9 新增**（起因 M-018：`lib/providers/providers.dart:208` 的
+      `weeksSinceLastDeload: 0` → 减载建议永远不出现）。
+      **Added in v4.9** (M-018).
+    - 只查 `lib/`、**跳过 `test/`**（测试故意写固定值构造确定场景，属正确用法）。
+    - 两道降噪：①三元假分支（`rawSince > 0 ? rawSince : 0`）放行；
+      ②`final/const/var/late/int/num <名字> =` 声明赋值放行。
+    - 修法 = **先把历史事实落盘、再从存储读**；真的拿不到就让判定返回「未知」，
+      **不要喂 0**。
       Same-file only: a `static` member used by bare name inside **another class body**.
     - ⚠️ 三道降噪缺一不可（每一道都是反向验证时真踩出来的）：
       ① 本文件有同名**非静态**声明 → 跳过；
@@ -355,7 +370,7 @@ loosening de-noising is the #1 cause of closed escapes silently returning.
   test 里把日期写成 `DateTime(2026, 10, 5, 10)` 这种**离今天很近**的绝对值时，
   写当天全绿；但只要被测代码内部读了 `DateTime.now()`（如草稿 TTL 24h 的过期判定、
   「近 N 天」统计），隔天 `now - savedAt` 越过阈值 → 断言翻转，**必红且看不出原因**。
-  实测（fitcoach 2026-10-07）：`session_draft_test` 的 `sample()` 默认 `savedAt`
+  实测（fitcoach 2026-10-06）：`session_draft_test` 的 `sample()` 默认 `savedAt`
   写死 2026-10-05 10:00，而 `DraftPref.load()` 不传 `now` 就取真实时钟 → 27h > TTL
   → 判过期顺手清除 → `expect(back, isNotNull)` 拿到 null。
   **纪律：测试用到的日期要么注入时钟（`now:` / `until:` 参数），要么取 `DateTime.now()`

@@ -1047,9 +1047,12 @@ DART_TYPE_MEMBERS = {
         'difference',
     },
     'Map': {
-        'keys', 'values', 'entries', 'containsKey', 'containsValue', 'putIfAbsent',
-        'update', 'updateAll', 'remove', 'clear', 'addAll', 'addEntries', 'removeWhere',
-        'map', 'forEach', 'cast',
+        # M-017：`Map` 此前漏了 `Iterable` 继承的 length/isEmpty/isNotEmpty
+        # （DART_TYPE_PARENTS 里 Map 也没挂 Iterable）→ `_joint.isEmpty` 被误报成
+        # undefined_getter。补成员比补继承链更省事且不影响其它判定。
+        'length', 'isEmpty', 'isNotEmpty', 'keys', 'values', 'entries', 'containsKey',
+        'containsValue', 'putIfAbsent', 'update', 'updateAll', 'remove', 'clear',
+        'addAll', 'addEntries', 'removeWhere', 'map', 'forEach', 'cast',
     },
     'Future': {'then', 'catchError', 'whenComplete', 'timeout', 'asStream'},
     'Uri': {
@@ -1969,6 +1972,47 @@ def check_static_member_unqualified(files, findings):
                                     'reports undefined_identifier' % (name, name))))
 
 
+# C24 · 判定函数被喂「距今 / 自上次」类参数的**字面量常量** → 判定吃假数据。
+# 最危险的空心形态：`planDeload(weeksSinceLastDeload: 0, ...)` —— 0 是合法值、
+# 宿主 analyze 不报错、单测也过，但整条减载判定从此**永远不成立**；
+# 用户看到的是「它给了我一个结论」，实际是「它把常量当历史喂给了自己」。
+# （2026-10-06 v1.6 候选盘点发现，登记为 #68 的地基欠账。）
+_SINCE_LITERAL_RE = re.compile(r'\b([A-Za-z]\w*Since\w*)\s*:\s*(\d+)')
+
+
+def check_since_literal_fallback(files, findings):
+    """C24 · 「距今 / 自上次」类参数被喂字面量常量 → 判定吃假数据（静默失效）。"""
+    for fp in files:
+        norm = fp.replace('\\', '/')
+        # 测试里**故意**写固定值（构造确定场景）→ 不算；只查产品代码。
+        if '/test/' in norm or norm.endswith('_test.dart'):
+            continue
+        code = mask_strings_comments(read(fp))
+        for i, ln in enumerate(code.split('\n'), 1):
+            for m in _SINCE_LITERAL_RE.finditer(ln):
+                # 降噪①：三元 `rawSince > 0 ? rawSince : 0` 的假分支，不是命名参数
+                if '?' in ln[:m.start()]:
+                    continue
+                # 降噪②：声明 / 赋值（`final sessionsSinceExport = ...`）不是调用
+                if re.search(r'(?:final|const|var|late|int|num)\s+%s\s*[=;]'
+                             % re.escape(m.group(1)), ln):
+                    continue
+                findings.append(('HINT', 'C24', fp, i,
+                                 bi('判定参数 `%s` 被喂字面量 `%s`：「距今/自上次」类入参'
+                                    '必须是**真实历史值**，写死常量会让整条判定静默失效'
+                                    '（不报错、不崩，只是永远不成立）。正确做法 = 先把'
+                                    '这个历史事实落盘（如减载发生即写日期），再从存储读；'
+                                    '若确实拿不到，宁可让判定返回「未知」也不要喂 0'
+                                    % (m.group(1), m.group(2)),
+                                    'Judgement parameter `%s` is fed the literal `%s`: '
+                                    '"time-since" inputs must come from real history; a '
+                                    'hardcoded constant makes the whole verdict silently '
+                                    'unreachable (no error, no crash — just never fires). '
+                                    'Persist the fact first, then read it; if unavailable, '
+                                    'return "unknown" rather than 0'
+                                    % (m.group(1), m.group(2)))))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -2031,6 +2075,7 @@ def main():
     check_library_directive_order(files, findings)
     check_ambiguous_finder(files, findings)
     check_static_member_unqualified(files, findings)
+    check_since_literal_fallback(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']
