@@ -1,7 +1,7 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.11 起 24 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.12 起 24 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
   flutter analyze，做 24 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
@@ -73,11 +73,11 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
 > v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、
 > v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、v4.7 起 21 项、v4.8 起 22 项、
-> v4.9 起 23 项、v4.10 起 24 项、**v4.11 把 C25 升级为传递闭包（项数不变）**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v4.9 起 23 项、v4.10 起 24 项、**v4.11 把 C25 升级为传递闭包（项数不变）**、v4.12 为 C6 白名单补 `separatorBuilder`（M-022，仍 24）。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
 > 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, 18 since v4.4,
 > 19 since v4.5, 20 since v4.6, 21 since v4.7, 22 since v4.8, 23 since v4.9,
-> **24 since v4.10** (v4.11 = C25 transitive upgrade, count unchanged). The name is kept so existing docs and project-memory
+> **24 since v4.10** (v4.11 = C25 transitive upgrade, v4.12 = C6 whitelist, count unchanged). The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
