@@ -633,6 +633,52 @@
 
 ---
 
+### M-023 · 2026-10-06 · fitcoach(#75 F24 关节不适写档案) · `UserProfile.jointDiscomfort` **跨类张冠李戴** → **新增 C26（形参成员存在性）**
+
+> ⚠️ **真漏报**（代价最大一类：整片 `widget_test` Failed to load，一整轮复验报废）。
+
+- **症状 Symptom**：宿主 `flutter analyze` 报 6 条
+  `The getter 'jointDiscomfort' isn't defined for the type 'UserProfile'`
+  （`profile_page.dart:55` / `training_record_page.dart:912` / `joint_archive_action.dart:67,86`
+  含 `No named parameter with the name 'jointDiscomfort'`）；`flutter test` `+714 -2`，
+  `test/widget_test.dart` **Failed to load**。
+- **根因 Root cause**：细分文档 `F24-joint-to-profile.md` 初稿据 `models.dart:1194`
+  断言「`UserProfile.jointDiscomfort` 已存在」—— 那处其实是
+  **`TrainingSession.jointDiscomfort`**（#55 的单次训前状态）。`UserProfile`
+  **从来没有任何关节字段**。文档照错的前提写 → 编码照文档用 → 编译硬错。
+  修法 = 按零迁移**新增**可空字段并补齐七处落点。
+- **旧九板斧为何漏 Why missed**：C15（`check_member_exists`）刻意**排除形参**
+  （`decl_re` 要求 `Type x = ...`，注释：「形参不算 —— 同名标识符跨函数可能是
+  不同类型（实测误报过）」）。而本次 3 处出错里，**唯一类型明确的那处**
+  （`Widget _jointArchiveSection(BuildContext context, UserProfile p)` → `p.jointDiscomfort`）
+  恰恰是形参；另两处是 `await repo.getProfile()` / `ref.watch(...)`，类型推断不出来，
+  C15 也跳过。→ **这类错没有任何一斧在管**。
+- **补的斧 Fix**：新增 **C26** `check_param_member_exists` —— 把形参纳入，但用
+  **函数体作用域**关住误报：① 只认「签名后紧跟 `{` / `=>`」的形参表；
+  ② 只在该函数体 span 内校验成员；③ 形参被局部变量遮蔽 → 跳过；
+  ④ 类型须「工程内声明 + 成员集合封闭」（opaque → 跳过）。
+- **最小复现 Minimal repro**：`git checkout 68aa867 -- lib/data/models.dart`
+  （= 修复前状态）→ 期望并实测 **`[C26] lib/features/profile/profile_page.dart:55
+  形参 p: UserProfile 上访问了 jointDiscomfort`** ✅。
+- **反向验证 Reverse-validation**：
+  ① 复现命中 ✅（精确指到真凶那一行）；
+  ② 还原后 fitcoach **187 文件工程干净** ✅（零误报）；
+  ③ ⚠️ **复现必须还原完整的修复前状态** —— 我第一次只把字段声明改名，
+  `copyWith` 的形参 `Map<String,String>? jointDiscomfort,` 仍被 `_body_members`
+  收进成员集 → **复现失败**（看着像斧头没用）。
+- **规律（写给以后的我）**：
+  ① **细分文档写「字段已存在」前，必须 `grep -n "class X"` 确认该字段在
+  那个类的花括号区间内** —— 同名不同类是最易踩的张冠李戴（本次就是
+  `TrainingSession` vs `UserProfile`）；
+  ② 新增字段的**七处落点**里漏 `withUpdatedAt` = 每次保存被清成 null，
+  已由 TC-B-JTP-10 钉住；
+  ③ 顺带发现一条**文档纪律**：弹窗文案不得承诺未实现的行为
+  （原文案「伤病避让会参考它」→ 档案项其实不接避让）。
+
+- **状态**：✅ 已补斧并反向验证通过（2026-10-06，v4.13，25 项）。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown

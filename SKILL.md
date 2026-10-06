@@ -1,7 +1,7 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.12 起 24 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.13 起 25 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
   flutter analyze，做 24 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
@@ -68,16 +68,16 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 二十四板斧检查项 / The Twenty-Four Checks
+## 二十五板斧检查项 / The Twenty-Five Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
 > v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、
 > v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、v4.7 起 21 项、v4.8 起 22 项、
-> v4.9 起 23 项、v4.10 起 24 项、**v4.11 把 C25 升级为传递闭包（项数不变）**、v4.12 为 C6 白名单补 `separatorBuilder`（M-022，仍 24）。名字保留，避免打断既有文档与项目记忆里的引用。
+> v4.9 起 23 项、v4.10 起 24 项、**v4.11 把 C25 升级为传递闭包（项数不变）**、v4.12 为 C6 白名单补 `separatorBuilder`（M-022，仍 24）、**v4.13 新增 C26「工程类型形参的成员存在性」（M-023，25 项）**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
 > 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, 18 since v4.4,
 > 19 since v4.5, 20 since v4.6, 21 since v4.7, 22 since v4.8, 23 since v4.9,
-> **24 since v4.10** (v4.11 = C25 transitive upgrade, v4.12 = C6 whitelist, count unchanged). The name is kept so existing docs and project-memory
+> **24 since v4.10** (v4.11 = C25 transitive upgrade, v4.12 = C6 whitelist, count unchanged), **25 since v4.13** (C26, M-023). The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -341,6 +341,36 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
     - 反向验证（四条，v4.11 全跑过）：① 传递链命中 → ERROR；
       ② 条件导入（Web 守卫）→ **放行**；③ 守卫写成 `dart.library.io` → 命中；
       ④ **在真工程上临时改回 bug**，确认能抓住再还原。
+
+25. **工程类型形参的成员存在性（ERROR，C26）** / **Param member existence**:
+    形参带**工程内类型**时（`void f(UserProfile p)`），函数体里访问了该类没有的成员
+    → `undefined_getter` 编译硬错。
+    When a parameter is typed with a project class, any member accessed on it inside
+    that function body must exist on the class.
+    - **v4.13 新增**（M-023，代价 = 一整轮宿主复验）：`#75（F24）`把
+      `UserProfile.jointDiscomfort` 当成已存在的档案字段写进代码，实际那处是
+      **`TrainingSession.jointDiscomfort`**（#55 的单次训前状态）→ 6 条
+      `undefined_getter` + 整片 `widget_test` Failed to load（`+714 -2`）。
+      **Added in v4.13** (M-023): a same-named member was borrowed from another class;
+      6 `undefined_getter` errors and an entire test file failed to load.
+    - ⚠️ **C15 为什么没抓到**：C15 的 `decl_re` 要求 `Type x = ...`，注释明写
+      「形参不算 —— 同名标识符跨函数可能是不同类型（实测误报过）」。
+      取舍没错，但代价是**形参这类最明确的类型信息**完全没人管。
+      C15 skips formal parameters on purpose (same name, different types across
+      functions); C26 re-enables them with a tighter scope.
+    - **误报怎么关住（四条）**：① 只认「签名后紧跟 `{` / `=>`」的形参表
+      （调用点后面是 `;`，天然排除；`if`/`while`/`catch` 走关键字表）；
+      ② 成员访问**只在该函数体 span 内**校验 → 跨函数同名不再误判；
+      ③ 形参在函数体内被**局部变量遮蔽** → 整条跳过；
+      ④ 类型须「工程内声明 + 成员集合封闭」（`implements` 外部接口 = opaque → 跳过）。
+    - 🧠 **成员集合是「宁可多收」的**（`_body_members`）：`copyWith` 的形参名也会被
+      收进成员集 —— 所以「字段删了但 `copyWith` 参数还在」这种**半改**状态抓不到，
+      只有**全类都没这个名字**的张冠李戴才抓得到。这是刻意的少报，不是 bug。
+    - 反向验证（v4.13 全跑过）：① 真工程临时 `git checkout <修复前 commit> --
+      lib/data/models.dart` → **精确命中** `profile_page.dart:55`
+      `形参 p: UserProfile 上访问了 jointDiscomfort`；② 还原后 187 文件**工程干净**
+      （零误报）；③ ⚠️ 复现必须还原**完整的修复前状态** —— 只改一处落点不算复现
+      （`copyWith` 形参会把名字带回来，见上一条）。
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 

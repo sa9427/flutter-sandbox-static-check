@@ -1391,6 +1391,143 @@ def check_member_exists(files, findings):
                                 '`%s.%s`' % (t, member, recv, member))))
 
 
+# ── C26（2026-10-06 新增）· 工程类型**形参**的成员存在性 ───────────────────
+#
+# 起因（M-023，代价 = 一整轮宿主复验）：#75（F24）把 `UserProfile.jointDiscomfort`
+# 当成「已存在的档案字段」写进代码 —— 实际那处是 **`TrainingSession.jointDiscomfort`**
+# （#55 的单次训前状态），`UserProfile` 从来没这个字段 → 6 条 `undefined_getter`
+# + 整片 `widget_test` Failed to load（`+714 -2`）。
+#
+# C15 当时**一条都没报**，原因写在它自己的 `decl_re` 注释里：
+#   「形参不算 —— 同名标识符跨函数可能是不同类型（实测误报过）」。
+# 这条取舍本身没错（零误报优先），但代价是**最常见的一类错**完全没人管：
+# `void f(UserProfile p) { ... p.xxx ... }` —— 形参类型是最明确的类型信息，
+# 反而被跳过了。**跨类张冠李戴**（同名不同类）恰恰只可能在这里被抓到。
+#
+# C26 = 把形参纳入，但用**函数体作用域**把误报风险关住：
+#   ① 只认「签名后紧跟 `{` / `=>`」的括号（调用点后面是 `;`，天然被排除；
+#      `if` / `while` / `catch` 等由关键字表排除）；
+#   ② 成员访问**只在该函数体 span 内**校验 → 跨函数同名不再误判；
+#   ③ 形参在函数体内被局部变量遮蔽 → **整条跳过**（宁可不报，不误报）；
+#   ④ 类型仍是「工程内声明 + 成员集合封闭」（复用 `_project_members`，
+#      `implements` 外部接口的类 = opaque → 跳过）。
+#
+_BODY_PARAM_KW = {'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'catch',
+                  'try', 'on', 'return', 'new', 'const', 'final', 'late', 'var',
+                  'assert', 'sync', 'async', 'await', 'is'}
+
+
+def _split_params(src):
+    """按顶层逗号切形参表（跳过 `()` / `[]` / `{}` 里的逗号，如默认值）。"""
+    out, depth, cur = [], 0, ''
+    for c in src:
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            depth -= 1
+        if c == ',' and depth == 0:
+            out.append(cur)
+            cur = ''
+        else:
+            cur += c
+    out.append(cur)
+    return [x.strip() for x in out if x.strip()]
+
+
+def _param_blocks(code):
+    """[(body_start, body_end, params_src)] —— 只收**签名后紧跟函数体**的形参表。
+
+    ⚠️ 带初始化列表（`: super(...)`）的构造签名**整条跳过**：初始化列表里可能
+    出现 `{`（如 Map 字面量），会把「body 起点」认错 → 宁可不查。
+    """
+    out = []
+    for m in re.finditer(r'\(', code):
+        i = m.start()
+        head = code[max(0, i - 80):i]
+        pm = re.search(r'([A-Za-z_]\w*)\s*(?:<[^<>]*>)?\s*$', head)
+        if not pm or pm.group(1) in _BODY_PARAM_KW:
+            continue
+        j = _match_paren(code, i)
+        if j < 0:
+            continue
+        k, ch = _next_char(code, j + 1)
+        if ch != '{' and code[k:k + 2] != '=>':
+            continue
+        if ch == '{':
+            bstart, depth, e = k + 1, 1, k + 1
+            while e < len(code):
+                if code[e] == '{':
+                    depth += 1
+                elif code[e] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        break
+                e += 1
+            bend = e
+        else:
+            bstart = k + 2
+            bend = _stmt_terminator(code, bstart)
+            if bend < 0:
+                bend = len(code)
+        out.append((bstart, bend, code[i + 1:j]))
+    return out
+
+
+_PARAM_DECL_RE = re.compile(r'^([A-Z]\w*)\s*(?:<[^<>]*>)?\s*\??\s+(\w+)$')
+
+
+def check_param_member_exists(files, findings):
+    """C26 · 工程类型形参的成员存在性（undefined_getter 的**跨类张冠李戴**）。
+
+    与 C15 的分工：C15 查**局部变量 / 推断类型**，C26 查**形参**；
+    两者都用 `_project_members` 判成员集合，判不了就跳过（零误报优先）。
+    """
+    types = _collect_project_types(files)
+    memo = {}
+    for fp in files:
+        text = read(fp)
+        code = mask_strings_comments(text)
+        for bstart, bend, params_src in _param_blocks(code):
+            body = code[bstart:bend]
+            typed = []
+            for raw in _split_params(params_src):
+                p = re.sub(r'^(?:required\s+|covariant\s+)+', '', raw)
+                p = p.split('=')[0].strip()          # 去掉默认值
+                if 'this.' in p or 'super.' in p:
+                    continue
+                m = _PARAM_DECL_RE.match(p)
+                if not m or m.group(1) not in types:
+                    continue                          # 非工程类型（框架 / SDK）→ 不查
+                members = _project_members(types, m.group(1), memo)
+                if members is None:
+                    continue                          # 成员集合不封闭（opaque）→ 不查
+                typed.append((m.group(2), m.group(1), members))
+            for name, t, members in typed:
+                # ③ 被局部变量遮蔽 → 整条跳过
+                if re.search(r'\b(?:final|var|late|const)\s+%s\s*=' % re.escape(name),
+                             body):
+                    continue
+                if re.search(r'\b[A-Z]\w*\s+%s\s*=' % re.escape(name), body):
+                    continue
+                for am in re.finditer(r'(?<![\w.])%s\s*\??\.\s*(\w+)' % re.escape(name),
+                                      body):
+                    member = am.group(1)
+                    if member in members:
+                        continue
+                    lineno = text.count('\n', 0, bstart + am.start()) + 1
+                    findings.append(('ERROR', 'C26', fp, lineno,
+                                     bi('形参 `%s: %s` 上访问了 `%s`，但类型 %s **没有这个成员**'
+                                        '（undefined_getter 编译硬错）。'
+                                        '⚠️ 高频真因 = **跨类张冠李戴**：同名成员其实在**另一个类**上'
+                                        '（如 `TrainingSession.jointDiscomfort` 被当成 '
+                                        '`UserProfile.jointDiscomfort`）→ 用字段前先 '
+                                        '`grep -n "class X"` 确认它在**那个类的花括号里**。'
+                                        % (name, t, member, t),
+                                        'param `%s: %s` has no member `%s` '
+                                        '(undefined_getter) — often a same-named member '
+                                        'borrowed from another class' % (name, t, member))))
+
+
 # ── C16（2026-10-04 新增）· lint 规则表（表驱动）─────────────────────────
 #
 # 与 C12 的分工：C12 是**工程特有**的两条（连续下划线 / 私有命名）；
@@ -2242,6 +2379,7 @@ def main():
     check_lint_naming(files, findings)
     check_consumer_state_pair(files, findings)
     check_member_exists(files, findings)
+    check_param_member_exists(files, findings)
     check_lint_table(files, findings)
     check_deprecated_api(files, findings)
     check_local_underscore(files, findings)
