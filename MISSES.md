@@ -636,6 +636,27 @@
 ## 新条目模板 / Template for New Entries
 
 ```markdown
+### M-022 · 2026-10-06 · fitcoach(#72 归档页用 `ListView.separated`) · C6 对 **框架参数**误报 → **修改 C6 白名单**
+
+> ⚠️ **非漏报**：误报收敛（改的是降噪规则，故按台账要求登记 + 重跑复现）。
+> 与 M-020（`recursive`）**同一类**，是它的第二次出现。
+
+- **症状 Symptom**：九板斧在 `lib/features/exercise/archived_exercises_page.dart:66`
+  报 `[C6] 命名参数可能拼写错误：separatorBuilder:` —— 但它是
+  `ListView.separated` 的**真参数**，代码完全正确。
+- **根因 Root cause**：同 M-020 —— C6 的命名参数池只收 `lib/`+`test/` 的工程内签名，
+  **框架 / SDK 类的签名扫不到**。
+- **补的斧 Fix**：`COMMON_PARAMS` 增补 `separatorBuilder`。
+  ⛔ 同样**没有**放宽任何判定逻辑。
+- **反向验证 Reverse-validation**：`separatorBuilderr:`（拼错）→ **仍报 C6** ✅；
+  fitcoach 全库 180 文件复跑**工程干净** ✅。
+- **⚠️ 造错样本的坑（第二次踩）**：C6 对每个调用点**只报第一个**未知参数，
+  所以「正确 + 拼错」两个函数写在同一文件里时，拼错的那个会被前面的正确调用
+  「吃掉」→ 看着像放行写宽了。**造错样本必须让错误参数单独成一个调用点**。
+- **规律（写给以后的我）**：SDK/框架参数误报已出现 **2 次**（`recursive`、
+  `separatorBuilder`），属**已知类别**而非个案；再遇到同类，直接补白名单 +
+  造错验证即可，不必重新论证要不要补斧。
+
 ### M-0XX · 日期 · 项目(功能) · 一句话症状 → **新增/修改 CXX**
 
 - **症状**：宿主报的原文（error / lint 名 + 文件:行）。

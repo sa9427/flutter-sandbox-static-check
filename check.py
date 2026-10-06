@@ -44,6 +44,9 @@ COMMON_PARAMS = {
     # dart:io 目录遍历参数（同上；2026-10-06 实踩：`Directory.listSync(recursive: true)`
     # 被 C6 报 HINT —— SDK 签名不在 lib/ 扫描范围内，属误报）
     'recursive', 'followLinks',
+    # flutter widgets 的分隔构造器参数（同上；2026-10-06 实踩：
+    # `ListView.separated(separatorBuilder: ...)` 被 C6 报 HINT）
+    'separatorBuilder',
     # flutter_test 常用参数（测试代码的 expect(..., reason:) 等）
     'reason', 'skip', 'matcher', 'variants', 'tags',
     # 本工程自定义参数
