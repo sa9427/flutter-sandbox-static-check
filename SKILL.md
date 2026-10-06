@@ -467,6 +467,28 @@ loosening de-noising is the #1 cause of closed escapes silently returning.
   hardcode a date within days of today.** No axe: 159 hardcoded dates in the corpus are
   mostly injected clocks or pure labels; telling them apart needs data-flow analysis
   (see M-017), so a check would be pure noise.
+- **本工具查不到的第五类 —— 泛型实参的 nullability 不匹配**：
+  泛型组件的实参必须**连同 `?` 一起写**，否则 `X<Y?>` 传给 `X<Y>` 是编译硬错
+  （`argument_type_not_assignable`），而 C14 只判「类型上有没有这个成员」。
+  实测（fitcoach 2026-10-07）：`AsyncValue<VariationAdvice?>` 传给
+  `AsyncStateView<VariationAdvice>` → 全库测试 Failed to load。
+  **纪律：provider 里 data 可能为 null 的，消费端泛型一律写成 `T?`**，
+  再用 `isEmpty: (a) => a == null` 之类的判空分支处理「没有数据」。
+  A fifth class this tool cannot catch: **nullability mismatch in a generic argument** —
+  passing `X<Y?>` where `X<Y>` is expected is a hard error, and C14 only checks member
+  existence. **Rule: if a provider's data can be null, write the consumer's generic as
+  `T?`** and handle "no data" via a branch (`isEmpty: (a) => a == null`).
+- ⚠️ **写「文件级护栏」测试时，needle 必须真的能命中源码形态**：
+  声明带泛型参数就写 `class Foo<T> extends` / `Future<T?> bar<T>({`，
+  只写 `class Foo extends` / `Future<T?> bar(` 会**永远 0 命中** → 护栏自己变假红灯。
+  ⚠️ **另外 needle 要能同时覆盖泛型与非泛型调用点**（用 `RegExp(r'foo\s*[<(]')`），
+  否则裸调用漏统计。📌 **本机不跑 flutter 时，用 Python 复刻一遍 `hitsOf` 逐行计数核对**，
+  比等宿主跑一轮便宜得多（2026-10-07 实踩：三个护栏测试全是 needle 写错）。
+  When writing "file-level guard" tests, the needle must actually match the source form:
+  write `class Foo<T> extends` for generic declarations, and prefer
+  `RegExp(r'foo\s*[<(]')` so both generic and non-generic call sites are counted.
+  📌 **When the sandbox cannot run flutter, re-implement `hitsOf` in Python and count
+  line by line** — far cheaper than waiting for the host to run a full round.
 - 每次改完 Dart 代码跑一遍，确认 `RESULT: 工程干净 ✅` 后再提交。
   Run it after every Dart edit; only commit once `RESULT: 工程干净 ✅` is confirmed.
 - **宿主复验报了问题就走反哺流程**（见上一节 `MISSES.md`）：先判断是不是漏报，
