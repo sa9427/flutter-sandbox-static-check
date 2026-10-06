@@ -527,6 +527,62 @@
 
 ---
 
+### M-019 · 2026-10-06 · fitcoach(#63 导出文件下载) · Web-only 库进 `test/` 或 L1 → **新增 C25**
+
+> ⚠️ **本条不是漏报**（宿主尚未报错），是**主动加固**：#63 引入 `package:web` 时发现
+> 「全工程唯一允许用它」这条约束**只写在文件头注释里**，没有任何常驻信号守着 ——
+> 而它一旦被破坏，`flutter test` 是**整片 Failed to load**，且报错指不到真凶。
+
+- **症状 Symptom**（预演）：`test/x_test.dart` 或 L1（`lib/core/`、`lib/services/`）
+  里出现 `import 'package:web/web.dart';` / `import 'dart:js_interop';`
+  → `flutter test` 中所有（哪怕**间接**）引用该文件的测试集体 `Failed to load`；
+  报错只说「某个文件加载失败」，看不出真凶是 Web-only 库。
+  （同 #59 记录过的 `sembast_web` 老坑，但那条是**运行时**、这条是**编译期**。）
+- **根因 Root cause**：`package:web` 依赖 `dart:js_interop`，**VM 下不可用**；
+  而 VM 正是 `flutter test` 的宿主。
+- **旧九板斧为何漏 Why missed**：C1 只判「import 的目标文件是否存在」、
+  C11 只判「符号有没有 import」—— **没有任何一斧管「某个库能不能进某个分层」**。
+- **补的斧 Fix**：新增 **C25（ERROR）** ——
+  `package:web` / `dart:js_interop` / `dart:js_interop_unsafe` / `dart:html` /
+  `dart:js` / `dart:js_util` 出现在 `test/**` 或 L1 → 报 ERROR；
+  L2/L3（`lib/features/**`、`lib/widgets/**`、`lib/data/**`）**放行**。
+  ⚠️ 与 lint `avoid_web_libraries_in_flutter` 的分工：**lint 管「不许用旧 dart:html 系列」**（全工程），
+  **C25 管「新的 package:web 不许进 VM 可达位置」**（分层纯度）。
+- **最小复现 Repro**：临时在 `lib/core/x.dart` 加 `import 'package:web/web.dart';`
+  + 在 `test/y_test.dart` 加 `import 'dart:js_interop';` → 两条 C25 ERROR；
+  同样一行加在 `lib/features/z.dart` → **不报**（放行区）。
+- **反向验证 Reverse-validation**：✅ 三份样本全部符合预期（2026-10-06）；
+  fitcoach 全库 176 文件复跑**工程干净**（只有 `lib/features/export/file_download.dart`
+  一处 Web-only import，属放行区）。
+- **状态**：✅ 已补斧并反向验证通过（2026-10-06，v4.10）。
+
+### M-020 · 2026-10-06 · fitcoach(#63 测试用 `Directory.listSync`) · C6 对 **SDK 参数**误报 → **修改 C6 白名单**
+
+> ⚠️ **本条也是非漏报**：误报收敛（改的是降噪规则，故按台账要求登记 + 重跑复现）。
+
+- **症状 Symptom**：九板斧在 `test/services/export_file_test.dart:64` 报
+  `[C6] 命名参数可能拼写错误：recursive:` —— 但 `recursive:` 是 `dart:io`
+  `Directory.listSync` 的**真参数**，代码完全正确。
+- **根因 Root cause**：C6 的「命名参数池」只从 `lib/`+`test/` 的**工程内签名**收集，
+  **SDK 类的签名扫不到** → 凡是 SDK 专有参数都会被当成「拼写错误」。
+- **补的斧 Fix**：`COMMON_PARAMS` 增补 `recursive` / `followLinks`（与既有
+  「dart:core 的 seconds/minutes」同性质的一组）。
+  ⛔ 没有放宽 C6 的任何判定逻辑 —— 只是补了**本来就该在**的白名单。
+- **最小复现 Repro**：新建 `lib/x.dart`：
+  ```dart
+  void f() { for (final e in Directory('lib').listSync(recursive: true)) { … } }
+  ```
+  → 修前报 C6；修后**不报**。
+  ⚠️ 复现样本**不能**把调用写在裸函数体第一行（`void f() { d.listSync(recursive: true); }`）
+  —— `collect_named_params` 会连函数体里的 `{…}` 一起收进参数池 → 假阴性。
+- **反向验证 Reverse-validation**：同文件里 `recursivee: true`（拼错）→ **仍报 C6**；
+  fitcoach 全库复跑**工程干净**。
+- **影响面**：与 M-013（框架控件命名参数写错 → 不补斧）**无交集**（那类是「少了参数」，
+  C6 本来就抓不到）；本次只加了两个当前工程内**无人使用**的参数名。
+- **状态**：✅ 已修改白名单并反向验证通过（2026-10-06）。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown

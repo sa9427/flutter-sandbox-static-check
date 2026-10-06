@@ -105,6 +105,10 @@ python3 check.py --no-test
 | C11 | 符号用到但没 import / Used-but-not-imported symbol | ERROR | **v3 新增**：用了某符号却没 import 定义它的文件（Dart import 不传递）；已按 part/export 闭包、成员访问、命名实参降噪 / **added in v3**: symbol used without importing its defining file (Dart imports are not transitive); de-noised via part/export closure, member access, named args |
 | C12 | lint 6 命名与下划线 / lint 6 naming & underscores | HINT | **v3 新增**：标识符含连续下划线（`__`）、顶层私有函数写成 `_UpperCamel` / **added in v3**: consecutive underscores in identifiers, private top-level functions written as `_UpperCamel` |
 | C14 | ConsumerState ↔ widget 配对 / ConsumerState pairing | ERROR | **v4 新增**：`ConsumerState<X>` 要求 `X extends ConsumerStatefulWidget`（反之亦然），双向检查、仅同文件配对 / **added in v4**: `ConsumerState<X>` requires `X extends ConsumerStatefulWidget` (and vice versa); both directions, same-file only |
+| C25 | Web-only 库不许进 `test/` 与 L1 / No web-only libs in `test/` or L1 | ERROR | **v4.10 新增**（M-019）：`package:web` / `dart:js_interop*` / `dart:html` / `dart:js*` 出现在 `test/**` 或 `lib/core|services/**` → `flutter test` 整片 `Failed to load`；L2/L3（`lib/features/**` 等）放行 / **added in v4.10** (M-019): these libs are VM-unavailable; flagged in `test/` and L1 only, allowed in L2/L3 |
+
+> ⚠️ **本表 C15–C24 行待补**（以 `SKILL.md`「二十四板斧检查项」清单为准 —— 那里是唯一完整清单）。
+> Rows C15–C24 are still missing here; `SKILL.md`'s 24-check list is the complete one.
 
 脚本自动跳过生成文件（`*.g.dart` / `*.freezed.dart` / `build/` / `.dart_tool/`）。
 The script auto-skips generated files (`*.g.dart` / `*.freezed.dart` / `build/` / `.dart_tool/`).

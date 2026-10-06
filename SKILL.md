@@ -1,9 +1,9 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.9 起 23 项）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.10 起 24 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
-  flutter analyze，做 23 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
+  flutter analyze，做 24 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
   字符串型枚举残留、未用依赖、**符号用到但没 import**、**lint6 命名与下划线**、
   **ConsumerState 与 widget 配对**、**成员存在性**、**lint 规则表**、
@@ -68,14 +68,16 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 - 结尾打印 / Prints at the end:
   `RESULT: 工程干净 ✅` 或 / or `RESULT: 发现 N 处问题 ⚠️`.
 
-## 二十二板斧检查项 / The Twenty-Two Checks
+## 二十四板斧检查项 / The Twenty-Four Checks
 
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
 > v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、
-> v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、v4.7 起 21 项、v4.8 起 22 项、**v4.9 起 23 项**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、v4.7 起 21 项、v4.8 起 22 项、
+> v4.9 起 23 项、**v4.10 起 24 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
 > 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, 18 since v4.4,
-> 19 since v4.5, 20 since v4.6, 21 since v4.7, 22 since v4.8, **23 since v4.9**. The name is kept so existing docs and project-memory
+> 19 since v4.5, 20 since v4.6, 21 since v4.7, 22 since v4.8, 23 since v4.9,
+> **24 since v4.10**. The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -88,8 +90,9 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
    Collects all `enum` members (incl. one-line multi-value `light, medium, hard;`), scans `Enum.value` / `Enum.values.byName('value')` for missing values.
 5. **assets 引用缺失（HINT）** / **Missing asset reference**: `pubspec` 的 `assets:` 与代码中 `AssetImage`/`rootBundle.load`/`exact` 引用交叉核对。
    Cross-checks `pubspec`'s `assets:` against `AssetImage`/`rootBundle.load`/`exact` references in code.
-6. **命名参数拼写（HINT）** / **Named-arg spelling**: 对小写业务函数调用，检查命名参数是否真在签名中声明；内置 Flutter 框架参数 + 工程自定义参数白名单降噪。
-   For lowercase business-function calls, checks whether named args are really declared in the signature; a whitelist of built-in Flutter params + project params reduces noise.
+6. **命名参数拼写（HINT）** / **Named-arg spelling**: 对小写业务函数调用，检查命名参数是否真在签名中声明；内置 Flutter 框架参数 + 常见 **SDK 参数**（`dart:core` 的 `seconds/minutes`、\`dart:io\` 的 `recursive/followLinks` 等）+ 工程自定义参数白名单降噪。
+   For lowercase business-function calls, checks whether named args are really declared in the signature; a whitelist of built-in Flutter params + common **SDK** params + project params reduces noise.
+   ⚠️ **SDK 类的命名参数天然不在 `lib/` 签名池里** —— 遇到 `Directory.listSync(recursive:)` 这类 HINT，先确认是不是 SDK 参数，是就补白名单（`COMMON_PARAMS`），不是再改代码。
 7. **未使用 import（HINT）** / **Unused import**:
    - `as prefix`：从未以 `prefix.` 引用 → 判未用（精确）。
      `as prefix` never referenced as `prefix.` → unused (precise).
@@ -249,6 +252,12 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       临时可用 `.first` / `descendant` 消歧（本斧会放行）。
       Fix = add a `static const Key` to the widget and use `find.byKey`;
       `.first` / `descendant` also pass the check.
+    - 只对 `InkWell / InkResponse / GestureDetector / IconButton / TextButton /
+      ElevatedButton / OutlinedButton / FloatingActionButton / Icon` 报警
+      （`Text` / `Container` 之类太常见，报了就是噪声）；整行注释跳过 →
+      「别用 find.byType(InkWell)」这类防复发注释不会被自己报出来。
+      Only gesture/button types are flagged; full-line comments are skipped so
+      "do not use find.byType(InkWell)" notes do not self-report.
 22. **静态成员必须 `类名.成员` 访问，不能裸名（ERROR）** /
     **Static members must be qualified with `ClassName.`**:
     Dart 的 `static` **不参与继承**、也**不能裸名访问** —— 在 `State<X>` 子类里写
@@ -261,6 +270,13 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       **Added in v4.8** (M-016).
     - 只查**同文件**：某个类里定义的 `static` 成员，在**另一个类的类体内**被裸名使用。
       跨文件的情形（在别的文件里裸用）已属导入/符号分析范畴，暂不覆盖。
+      Same-file only: a `static` member used by bare name inside **another class body**.
+    - ⚠️ 三道降噪缺一不可（每一道都是反向验证时真踩出来的）：
+      ① 本文件有同名**非静态**声明 → 跳过；
+      ② 只报「落在另一个类体内」的用法（顶层/函数外太宽，放行）；
+      ③ **声明不算用法** —— `final String dateKey;` / `{required this.dateKey}`
+      这类同名字段是合法的（第一版报了 2 处误报）。
+      Three denoising rules are all required, each found by real reverse-validation.
 23. **判定参数不许被喂字面量兜底（HINT）** /
     **"Time-since" judgement args must not be fed literal constants**:
     `\b\w*Since\w*\s*:\s*\d+`（如 `planDeload(weeksSinceLastDeload: 0, ...)`）——
@@ -276,19 +292,27 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       ②`final/const/var/late/int/num <名字> =` 声明赋值放行。
     - 修法 = **先把历史事实落盘、再从存储读**；真的拿不到就让判定返回「未知」，
       **不要喂 0**。
-      Same-file only: a `static` member used by bare name inside **another class body**.
-    - ⚠️ 三道降噪缺一不可（每一道都是反向验证时真踩出来的）：
-      ① 本文件有同名**非静态**声明 → 跳过；
-      ② 只报「落在另一个类体内」的用法（顶层/函数外太宽，放行）；
-      ③ **声明不算用法** —— `final String dateKey;` / `{required this.dateKey}`
-      这类同名字段是合法的（第一版报了 2 处误报）。
-      Three denoising rules are all required, each found by real reverse-validation.
-    - 只对 `InkWell / InkResponse / GestureDetector / IconButton / TextButton /
-      ElevatedButton / OutlinedButton / FloatingActionButton / Icon` 报警
-      （`Text` / `Container` 之类太常见，报了就是噪声）；整行注释跳过 →
-      「别用 find.byType(InkWell)」这类防复发注释不会被自己报出来。
-      Only gesture/button types are flagged; full-line comments are skipped so
-      "do not use find.byType(InkWell)" notes do not self-report.
+24. **Web-only 库不许出现在 `test/` 与 L1（ERROR）** /
+    **Web-only libraries must not appear in `test/` or L1**:
+    `import 'package:web'` / `dart:js_interop` / `dart:js_interop_unsafe` /
+    `dart:html` / `dart:js` / `dart:js_util` —— 这些库在 **VM 下不可用**
+    （`package:web` 依赖 `dart:js_interop`），一旦被 `test/`（哪怕**间接**）
+    import → `flutter test` 整片 `Failed to load`，且报错只说「某文件加载失败」，
+    看不出真凶是 Web 库。
+    These libraries are unavailable on the VM; one (even indirect) import from
+    `test/` makes the whole `flutter test` run fail to load.
+    - **v4.10 新增**（起因 M-019：#63 导出文件下载引入 `package:web`，
+      它是全工程唯一允许用 Web-only 库的地方；这条约束此前只写在文件头注释里，
+      没有任何常驻信号守着）。
+      **Added in v4.10** (M-019).
+    - 判定范围：`test/**` 与 `lib/core/**`、`lib/services/**`（L1）→ **ERROR**；
+      `lib/features/**`、`lib/widgets/**`、`lib/data/**` 等 L2/L3 → **放行**。
+    - ⚠️ 与 lint `avoid_web_libraries_in_flutter`（`flutter_lints` 6.0.0 已启用）
+      的分工：**lint 管「不许用旧的 dart:html 系列」**（全工程），
+      **本斧管「新的 package:web 不许进 VM 可达位置」**（分层纯度）。
+      ⛔ `dart:html` 仍然是红灯 —— 官方替代只有 `package:web`。
+    - 修法：把 Web-only 调用**收口进一个 L2/L3 适配文件**，L1 只留纯函数
+      （如导出文件名），测试只测 L1 那一半。
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 

@@ -41,6 +41,9 @@ COMMON_PARAMS = {
     'debugShowCheckedModeBanner', 'locale', 'supportedLocales', 'localizationsDelegates',
     # Duration / DateTime 等 dart:core 参数（签名在 SDK 内，扫描不到）
     'seconds', 'milliseconds', 'microseconds', 'minutes', 'hours', 'days',
+    # dart:io 目录遍历参数（同上；2026-10-06 实踩：`Directory.listSync(recursive: true)`
+    # 被 C6 报 HINT —— SDK 签名不在 lib/ 扫描范围内，属误报）
+    'recursive', 'followLinks',
     # flutter_test 常用参数（测试代码的 expect(..., reason:) 等）
     'reason', 'skip', 'matcher', 'variants', 'tags',
     # 本工程自定义参数
@@ -2013,6 +2016,52 @@ def check_since_literal_fallback(files, findings):
                                     % (m.group(1), m.group(2)))))
 
 
+# C25 · Web-only 库不许出现在 **VM 可达位置**（`test/` 与 L1 `core`·`services`）。
+# `package:web` 依赖 `dart:js_interop`，VM 下不可用 —— 谁 import 它，`flutter test`
+# 里所有（哪怕**间接**）引用它的测试文件会**集体 Failed to load**，而报错只指向
+# 「加载失败的那个文件」，真凶（Web 库）完全看不出来（同 #59 的 `sembast_web` 老坑，
+# 但那条是运行时、这条是编译期）。
+# （2026-10-06 #63 导出文件下载引入 `package:web` 时发现 —— 该约束此前只写在
+#   文件头注释里，没有任何常驻信号守着。登记 M-019。）
+_WEB_ONLY_IMPORT_RE = re.compile(
+    r"^\s*import\s+['\"](package:web|dart:(?:js_interop|js_interop_unsafe|html|js|js_util))")
+
+
+def check_web_only_imports(files, findings):
+    """C25 · Web-only 库出现在 `test/` 或 L1 → 整片测试 Failed to load（ERROR）。"""
+    for fp in files:
+        norm = fp.replace('\\', '/')
+        # ⚠️ zone 用**单语**两个变量：它要嵌进 bi() 的双语模板里，
+        #    若 zone 本身已是 bi() 结果，中英文会互相插进对方的句子里。
+        if '/test/' in norm:
+            zone_zh, zone_en = '`test/` 里', 'in `test/`'
+        elif '/lib/core/' in norm or '/lib/services/' in norm:
+            zone_zh = 'L1（`lib/core/` 或 `lib/services/`）里'
+            zone_en = 'in L1 (`lib/core/` or `lib/services/`)'
+        else:
+            # L2/L3（`lib/features/**` / `lib/widgets/**` / `lib/data/**`）= 允许区。
+            continue
+        for i, ln in enumerate(read(fp).split('\n'), 1):
+            m = _WEB_ONLY_IMPORT_RE.search(ln)
+            if not m:
+                continue
+            findings.append(('ERROR', 'C25', fp, i,
+                             bi('%s出现了 Web-only 库 `%s`：它**在 VM 下不可用** → '
+                                '`flutter test` 中所有（哪怕间接）引用本文件的测试会'
+                                '**集体 Failed to load**，而报错只指向加载失败的文件，'
+                                '看不出真凶。修法 = 把 Web-only 调用**收口进一个 L2/L3 '
+                                '适配文件**（如 `lib/features/export/file_download.dart`），'
+                                'L1 只留纯函数（能落单测的那一半），测试只测 L1。'
+                                % (zone_zh, m.group(1)),
+                                'the web-only library `%s` is imported %s: it is '
+                                '**unavailable on the VM** → every test that reaches '
+                                'this file (even indirectly) fails to load, and the '
+                                'error only names the failing file, not the cause. '
+                                'Fix = confine web-only calls to a single L2/L3 '
+                                'adapter and keep L1 pure/testable.'
+                                % (m.group(1), zone_en))))
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -2076,6 +2125,7 @@ def main():
     check_ambiguous_finder(files, findings)
     check_static_member_unqualified(files, findings)
     check_since_literal_fallback(files, findings)
+    check_web_only_imports(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']
