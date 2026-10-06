@@ -108,8 +108,15 @@ python3 check.py --no-test
 | C25 | Web-only 库不许进 `test/` 与 L1 / No web-only libs in `test/` or L1 | ERROR | **v4.10 新增**（M-019）：`package:web` / `dart:js_interop*` / `dart:html` / `dart:js*` 出现在 `test/**` 或 `lib/core|services/**` → `flutter test` 整片 `Failed to load`；L2/L3（`lib/features/**` 等）放行。⚠️ **v4.11 升级为传递闭包 + 条件导入感知**（M-021）：只查直接 import **拦不住真凶**（真链是 `test/…→…→适配文件→package:web`）；同时 `if (dart.library.js_interop)` 分支在 VM 下不编译 → **不算命中** / **added in v4.10** (M-019), **upgraded in v4.11** (M-021): these libs are VM-unavailable; now detected through the **transitive** import/export closure from `test/`, and branches guarded by a web `dart.library.*` are correctly treated as not compiled on the VM |
 
 | C26 | 工程类型**形参**的成员存在性 / Param member existence | ERROR | **v4.13 新增**（M-023）：`void f(UserProfile p) { ... p.xxx ... }` 里 `xxx` 不在该类的成员集合 → `undefined_getter`。⚠️ **专治跨类张冠李戴**（真例：`TrainingSession.jointDiscomfort` 被当成 `UserProfile.jointDiscomfort`，6 条编译错 + 整片 `widget_test` Failed to load）。C15 刻意**排除形参**（跨函数同名易误报），C26 用**函数体作用域**把它关住：只查「签名后紧跟 `{`/`=>`」的形参、只在该函数体内校验、形参被局部变量遮蔽则跳过 / **added in v4.13** (M-023): catches `undefined_getter` on parameters typed with project classes — the classic "same-named member borrowed from another class" bug. C15 deliberately skips params; C26 re-enables them inside a scope-limited function body |
-> ⚠️ **本表 C15–C24 行待补**（以 `SKILL.md`「二十四板斧检查项」清单为准 —— 那里是唯一完整清单）。
-> Rows C15–C24 are still missing here; `SKILL.md`'s 24-check list is the complete one.
+> ⚠️ **本表 C15–C24 行待补**（以 `SKILL.md`「二十五板斧检查项」清单为准 —— 那里是唯一完整清单）。
+> Rows C15–C24 are still missing here; `SKILL.md`'s 25-check list is the complete one.
+>
+> **v4.14（2026-10-06）= 两条误报修复，项数仍 25**：
+> **M-024** C6 参数池正则容忍**一层嵌套花括号默认值**（否则签名里出现 `= const {}`
+> → 该签名**所有**命名参数都收不进池 → 调用点全被误报拼写错误）；
+> **M-025** C7 符号收集正则容忍**函数名后的泛型参数名**（否则
+> `Future<T?> showAppDialog<T>(` 收不进符号表 → import 它的文件全被误报「未使用」）。
+> 两条均已做反向验证（造错仍报 + 还原后工程干净）。明细见 `MISSES.md` M-024 / M-025。
 
 脚本自动跳过生成文件（`*.g.dart` / `*.freezed.dart` / `build/` / `.dart_tool/`）。
 The script auto-skips generated files (`*.g.dart` / `*.freezed.dart` / `build/` / `.dart_tool/`).

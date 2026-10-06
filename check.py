@@ -465,7 +465,15 @@ def collect_named_params(lib_dir):
                 continue
             text = read(fp)
             # 只取一层花括号（[^{}] 避免跨嵌套误配）
-            for m in re.finditer(r'\{([^{}]*)\}', text):
+            #
+            # ⚠️ 2026-10-06 修（M-024）：`[^{}]*` **容不下一层花括号默认值** ——
+            # 签名里只要出现 `const {}` / `= {}`（例如
+            # `Map<String, E1rmEstimate> e1rmByExercise = const {}`），正则就无法
+            # 从签名的 `{` 走到结尾的 `}`（中途撞见 `{`），只能退化成匹配
+            # `const {}` 这个**空块** → 该签名的**所有命名参数都没进池子** →
+            # 这些参数在调用点被误报成「拼写错误」（实踩：generators.dart 的
+            # `superset:`）。改成容忍**一层**嵌套花括号即可。
+            for m in re.finditer(r'\{((?:[^{}]|\{[^{}]*\})*)\}', text):
                 body = m.group(1)
                 # 先剥掉 `///` 文档注释行（2026-10-04 修）：
                 # 参数**上方**的注释里若出现 `= `（例如「`null` = 全量」），
@@ -687,8 +695,14 @@ def collect_file_symbols(lib_dir):
                             cur_on_type = om.group(1).strip() if om else None
                         continue
                     # 顶层函数（返回类型可含泛型）
+                    #
+                    # ⚠️ 2026-10-06 修（M-025）：函数名后的**泛型参数**此前没被容忍
+                    # （`Future<T?> showAppDialog<T>({` 里的 `<T>`），导致这类顶层函数
+                    # **完全收不进符号表** → 调用它的文件被 C7 误报成「import 未使用」
+                    # （实踩：app_dialog.dart 的 showAppDialog / showAppSheet，12 处误报）。
                     m = re.match(
-                        r'(?:external\s+)?[A-Za-z_][\w<>,\s\[\]?]*?\s+([a-z_]\w*)\s*\(', line)
+                        r'(?:external\s+)?[A-Za-z_][\w<>,\s\[\]?]*?\s+([a-z_]\w*)\s*'
+                        r'(?:<[^<>]*>)?\s*\(', line)
                     if m:
                         names.add(m.group(1))
                         continue
