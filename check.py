@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Flutter 沙箱静态体检（九板斧 / v4.8 起 22 项）—— 纯标准库，无第三方依赖。
+Flutter 沙箱静态体检（九板斧 / v4.15 起 27 项）—— 纯标准库，无第三方依赖。
 
 对 Flutter 工程的 lib/（v3 起默认含 test/）做文本静态检查，替代无法运行的 flutter analyze。
 用法：
@@ -2339,6 +2339,197 @@ def check_web_only_imports(files, findings):
                 queue.append(d)
 
 
+# ── C27（2026-10-08 新增）· SDK 扩展成员「本工程 Dart 版本不支持」名单 ──────
+#
+# 由来（宿主 `flutter analyze` 报 lib/data/models.dart:1349:55
+# `'firstOrNull' isn't a function or method and can't be invoked`）：
+# `.firstOrNull()` 是 `Iterable` 的**扩展方法**，本工程 Dart SDK 下并不存在
+# （它来自 `package:collection` 或更新的 SDK）→ 编译期硬错。
+# ⚠️ 危害被放大的原因：它落在 `models.dart` —— 全量测试的公共依赖，
+# 一个错让**所有**测试文件集体 `Failed to load`（与 M-014 / M-016 同一放大机制）。
+#
+# 与 C17 的分工（形制相同、对象不同，别合并）：
+#   - C17 管**第三方 API 被挪走 / 删除**（符号曾经可用）；
+#   - C27 管**扩展成员压根不在这个 SDK 里**（从未可用，除非 import 了提供它的包）。
+#
+# 零误报设计（四道，缺一即噪声）：
+#   1. 只匹配**点号之后**的成员名 —— 变量声明 / 函数名 / 类名不会误命中；
+#   2. 本文件 import 了「提供该扩展的包」→ 放行（那时它合法）；
+#   3. 走 `mask_strings_comments` —— 注释里写「别用 firstOrNull」不算命中；
+#   4. 每个成员每文件只报一次（同一处用法重复出现没必要刷屏）。
+UNSUPPORTED_EXT_RULES = [
+    # (成员名, 提供它的包（import 了就放行）, 中文说明, 英文说明)
+    ('firstOrNull', 'package:collection',
+     '它是 `package:collection` 的扩展，本工程 Dart SDK 不自带 —— 按名字取枚举/元素请写显式 for 循环',
+     'an extension from `package:collection`, absent from this SDK — look the member up with an explicit for-loop'),
+    ('lastOrNull', 'package:collection',
+     '同上：本工程 SDK 不自带，改显式 for 循环',
+     'same: absent from this SDK, use an explicit for-loop'),
+    ('singleOrNull', 'package:collection',
+     '同上：本工程 SDK 不自带，改显式 for 循环',
+     'same: absent from this SDK, use an explicit for-loop'),
+    ('firstWhereOrNull', 'package:collection',
+     '同上：本工程 SDK 不自带，改显式 for 循环',
+     'same: absent from this SDK, use an explicit for-loop'),
+    ('lastWhereOrNull', 'package:collection',
+     '同上：本工程 SDK 不自带，改显式 for 循环',
+     'same: absent from this SDK, use an explicit for-loop'),
+    ('whereNotNull', 'package:collection',
+     '同上：本工程 SDK 不自带，改 `.where((x) => x != null)`',
+     'same: absent from this SDK, use `.where((x) => x != null)`'),
+]
+
+
+def check_unsupported_ext(files, findings):
+    """C27 · SDK 扩展成员「本工程 Dart 版本不支持」名单（表驱动，见
+    UNSUPPORTED_EXT_RULES）。
+
+    为什么需要这一斧：C11 只管「符号用到但没 import」，C17 只管「第三方符号
+    被挪走」—— **扩展方法压根不存在**这一类谁都不管，而在沙箱里它是
+    `flutter analyze` 的 ERROR，且常落在公共文件上拖垮整片测试。
+    """
+    for fp in files:
+        text = read(fp)
+        code = mask_strings_comments(text)
+        imports = '\n'.join(re.findall(r"""^\s*import\s+['"]([^'"]+)['"]""",
+                                       text, re.M))
+        for member, provider_pkg, zh, en in UNSUPPORTED_EXT_RULES:
+            if provider_pkg and provider_pkg in imports:
+                continue
+            # 只认「点号之后的成员访问」：`x.firstOrNull`、`?.firstOrNull`。
+            hit = re.search(r'(?<=\.)%s\b' % re.escape(member), code)
+            if not hit:
+                continue
+            lineno = text.count('\n', 0, hit.start()) + 1
+            findings.append(('ERROR', 'C27', fp, lineno,
+                             bi('本工程 Dart SDK 没有这个扩展成员：`.%s` —— %s'
+                                '（若确实需要它，先 import `%s`）'
+                                % (member, zh, provider_pkg),
+                                'this SDK has no such extension member: `.%s` — %s'
+                                ' (import `%s` first if you really need it)'
+                                % (member, en, provider_pkg))))
+
+
+# ── C28（2026-10-08 新增）· 时间窗口调用没传「注入时钟」→ 测试时间炸弹 ──────
+#
+# 由来（宿主 `flutter test` 报 test/services/plateau_test.dart:121
+# `Expected 0.6667 / Actual 0.3333`，前一天全绿、当天无相关改动）：
+# 用例写死 `final now = DateTime(2026, 10, 1);` 却**没把 now 传给被测函数** ——
+# `plannedVsActualAdherence` 的 `until` 是可选参数，不传就拿**真实** `DateTime.now()`
+# 当锚点。真机日期一过 10-01，7 天窗口起点后移，吃掉 09-30 那场 → 2/3 变 1/3。
+#
+# 与 M-017 的关系（重要，别当成重复劳动）：
+#   M-017 判「不补斧」时的论据是「全库硬编码绝对日期 159 处，按硬编码日期报 = 噪声」。
+#   本斧**不查硬编码日期**，只查一个窄得多的形态：
+#     **被测函数已经开了 `now:` / `until:` 注入口，调用方却没用。**
+#   这个形态的噪声极小，且正是 M-017 那条人工纪律（「要么注入时钟、要么取相对值」）
+#   唯一能被机器验证的那一半。
+#
+# 零误报设计（四道）：
+#   1. **只报 `test/`** —— 生产代码本来就该用真实时钟，报了纯噪声；
+#   2. 该文件必须**真的写死了绝对日期**（`DateTime(20xx`）才有资格报 ——
+#      没有写死时钟的测试，即便不传 until 也是确定性的（跟着真实日期走，天天一样绿）；
+#   3. 调用点必须**显式传了跨度参数**（`weeks:` / `days:` / `windowDays:` …）——
+#      没有跨度的调用只有「上界」（排除未来），真机日期后移不会漏样本，不翻车
+#      （实测：`recentPeakRpe(sessions)` 无 `weeks:`/`days:` → 全库 0 翻车，属误报）；
+#   4. 被调方不传时钟时**不能是写死兜底**（函数体里有 `now ?? DateTime(2026, …)`
+#      这种常量兜底 → 不传也是确定性的 → 放行；实测挡掉 export_reminder_test 的
+#      `_evaluate`）。只有落到 `?? DateTime.now()`（真实时钟）的才报。
+#   5. 每个函数每文件只报一次。
+_CLOCK_SIG_RE = re.compile(
+    r'(?<![\w.])([a-z_]\w*)\s*(?:<[^<>]*>)?\s*\(([^()]*)\)')
+_ABS_DATE_RE = re.compile(r'DateTime\s*\(\s*20\d\d')
+# 「跨度」参数：有它才有**下界**，真机日期后移才会漏掉边界样本。
+_SPAN_PARAM_RE = re.compile(r'\b(?:weeks?|days?|windowDays|window|periods|'
+                            r'withinDays|spanDays|lookbackDays)\s*:')
+
+
+def _arg_block_at(code, open_pos):
+    """从 `(` 的位置起，括号计数取出整个实参块（不含最外层括号）。"""
+    depth = 0
+    for i in range(open_pos, len(code)):
+        c = code[i]
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            depth -= 1
+            if depth == 0:
+                return code[open_pos + 1:i]
+    return code[open_pos + 1:]
+
+
+def _clock_injectable_funcs(texts):
+    """{函数名: 时钟参数名} —— 工程内「签名带 `DateTime now` / `DateTime until`
+    命名参数、且**不传时会落到真实时钟**」的函数（= 开了注入口，但没给常量兜底）。
+
+    ⛔ 排除「常量兜底」形态：函数体里写 `now ?? DateTime(2026, 10, 5)` 的，
+    不传也是确定性的（天天一样），报它纯属噪声 —— 这一道挡掉了首版在
+    `export_reminder_test` 上的误报。
+    """
+    out = {}
+    for text in texts:
+        # 换行归一化：签名常跨多行，`[^()]*` 才连得起来。
+        flat = re.sub(r'\s+', ' ', text)
+        for m in _CLOCK_SIG_RE.finditer(flat):
+            params = m.group(2)
+            if 'DateTime' not in params or '{' not in params:
+                continue  # 无 DateTime，或没有命名参数段（位置参数不算注入口）
+            for cname in ('now', 'until'):
+                if not re.search(r'DateTime\s*\??\s+%s\b' % cname, params):
+                    continue
+                # 函数体片段：从签名往后取一段，够看清时钟怎么兜底。
+                body = flat[m.end():m.end() + 1200]
+                if re.search(r'\b%s\s*\?\?\s*DateTime\s*\(\s*20\d\d' % cname, body):
+                    continue  # 常量兜底 → 确定性，放行
+                out[m.group(1)] = cname
+                break
+    return out
+
+
+def check_clock_injection(files, findings):
+    """C28 · 时间窗口调用没传注入时钟（HINT，仅 `test/`）。
+
+    判据链：test 文件 + 写死绝对日期 + 调用了支持时钟注入的工程内函数 +
+    该调用没传 `now:` / `until:` → 提示。四道同时成立才报，缺一即放行。
+    """
+    test_files = [f for f in files
+                  if os.sep + 'test' + os.sep in f.replace('/', os.sep)]
+    if not test_files:
+        return
+    texts = [read(f) for f in files]
+    injectable = _clock_injectable_funcs(texts)
+    if not injectable:
+        return
+    for fp in test_files:
+        text = read(fp)
+        if not _ABS_DATE_RE.search(text):
+            continue  # 没写死时钟 → 不传 until 也是确定性的，不报
+        code = mask_strings_comments(text)
+        for m in re.finditer(r'(?<![\w.])(%s)\s*\(' % '|'.join(
+                sorted(injectable, key=len, reverse=True)), code):
+            fname = m.group(1)
+            block = _arg_block_at(code, m.end() - 1)
+            if re.search(r'\b(now|until)\s*:', block):
+                continue  # 已经传了时钟 → 放行
+            if not _SPAN_PARAM_RE.search(block):
+                continue  # 没传跨度 → 只有上界，不会随日期漏样本 → 放行
+            lineno = text.count('\n', 0, m.start()) + 1
+            findings.append(('HINT', 'C28', fp, lineno,
+                             bi('本文件写死了绝对日期，但 `%s(...)` **没传 `%s:`** —— '
+                                '不传就取真实 `DateTime.now()` 当锚点，真机日期一过'
+                                '写死的那天，窗口就会漏掉边界上的样本（时间炸弹）。'
+                                '修法：把写死的 `now` 传进去（或改用 `DateTime.now()` 的相对值）。'
+                                % (fname, injectable[fname]),
+                                'this file hardcodes an absolute date but `%s(...)` '
+                                'does not pass `%s:` — the callee then anchors on the '
+                                'real `DateTime.now()`, so once the host clock passes '
+                                'the hardcoded day the window silently drops boundary '
+                                'samples (time bomb). Fix: pass the hardcoded `now` '
+                                '(or switch to a `DateTime.now()`-relative value).'
+                                % (fname, injectable[fname]))))
+            break  # 每个函数每文件只报一次
+
+
 def main():
     global project_root_ref
     ap = argparse.ArgumentParser()
@@ -2404,6 +2595,8 @@ def main():
     check_static_member_unqualified(files, findings)
     check_since_literal_fallback(files, findings)
     check_web_only_imports(files, findings)
+    check_unsupported_ext(files, findings)
+    check_clock_injection(files, findings)
 
     errors = [f for f in findings if f[0] == 'ERROR']
     hints = [f for f in findings if f[0] == 'HINT']

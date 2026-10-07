@@ -497,6 +497,29 @@
   把系统时间推到 2026-10-06 10:00 之后 → TC-B-DRF-09 必红。
 - **状态**：⬜ 不补斧（能力边界）；已修被测代码 + 已升级人工纪律 + 已写防复发注释。
 
+### M-017 复发记录 · 2026-10-08 · fitcoach(v1.7 序 4/5/7 复验) · **同一个坑第二次出现**：这次函数**已经开了注入口，调用方没用**
+
+- **症状**：宿主 `flutter test` 报 `+471 -3`，唯一失败
+  `TC-B-PLT 简化依从性：计划每周 3 次、近 1 周实际 2 次 → 2/3` ——
+  `Expected: 0.6667 / Actual: 0.3333`。
+- **根因**：`plateau_test.dart:115` 写死 `final now = DateTime(2026, 10, 1);`，
+  但 :120 调 `plannedVsActualAdherence(plan, sessions, weeks: 1)` 时**没传 `until`**
+  —— 而 `until` 是可空可选参数，不传就 `until ?? DateTime.now()`，锚点取**真实**时钟。
+  真机今天 2026-10-08 → 窗口 `[10-01, 10-08]`，吃掉 09-30 那场 → 只剩 1 次 → 1/3。
+- **与 M-017 正文的差异（这就是能补斧的原因）**：M-017 是「被测函数**没有**
+  注入口」（只能改被测代码）；本次是被测函数**早就开了 `until:`**、是**调用方没传**。
+  判据因此可以从「查硬编码日期」（159 处噪声）收缩到
+  「**调用点没传已存在的时钟参数**」—— 噪声极小。→ **新增 C28**（见 M-027）。
+- **修法**：`plannedVsActualAdherence(plan, sessions, weeks: 1, until: now);`
+- **C28 顺带挖出的第二颗炸弹（首版之前没人发现）**：
+  `test/services/variation_advisor_test.dart:282`
+  `recentExerciseIds(_sessions(), days: 56, limit: 6)` —— 该函数
+  `from = anchor.subtract(Duration(days: days))` **有下界**，不传 `until` 就会
+  随真实日期后移漏样本（写死的 `_until = DateTime(2026, 10, 4)` 已存在，只是这条没用）。
+  → 一并补 `until: _until`。
+- **状态**：✅ 已修（两处）；M-017 的「不补斧」结论**部分修正** ——
+  全形态仍不补斧，但「有注入口却没传」这个子形态已由 **C28** 覆盖。
+
 ---
 
 ### M-018 · 2026-10-06 · fitcoach（v1.6 候选盘点）· 判定参数被喂字面量常量 → **新增 C24**
@@ -738,6 +761,76 @@
   症状一样、根因完全不同，改错方向会把真正有用的斧头写宽。
 
 - **状态**：✅ 已修复并反向验证通过（2026-10-06，v4.14，项数仍 25）。
+
+---
+
+### M-026 · 2026-10-08 · fitcoach(v1.7 序 10 F40 成绩字段) · `.firstOrNull()` 在本工程 SDK 下不存在 → **新增 C27**
+
+> ⚠️ **真漏报，且是「一个错拖垮全量测试」那一类**（与 M-014 / M-016 同一放大机制）。
+
+- **症状 Symptom**：宿主 `flutter analyze` 报
+  `lib/data/models.dart:1349:55: Error: 'firstOrNull' isn't a function or method and can't be invoked.`
+  连带 `unchecked_use_of_nullable_value`；`flutter test` 里 `widget_test.dart`
+  **Compilation failed**，多个测试文件集体 `Failed to load`
+  —— 用户看到的是「同时在多个地方报错」，实际**源码只有一处**。
+- **根因 Root cause**：`SessionScore.tryParse` 里按枚举名取值写了
+  `ScoreKind.values.where((e) => e.name == name).firstOrNull();`。
+  `firstOrNull` 是 `Iterable` 的**扩展方法**（来自 `package:collection` 或更新 SDK），
+  **本工程 Dart SDK 不自带**。修法 = 改**显式 `for` 循环**，不依赖任何 SDK 扩展。
+- **旧九板斧为何漏 Why missed**：C11 管「符号用到没 import」、C17 管「第三方 API
+  被挪走/删除」—— **「扩展成员压根不在这个 SDK 里」谁都不管**。
+- **补的斧 Fix**：新增 **C27（`UNSUPPORTED_EXT_RULES`，表驱动，ERROR）**，
+  首批 6 条：`firstOrNull` / `lastOrNull` / `singleOrNull` / `firstWhereOrNull` /
+  `lastWhereOrNull` / `whereNotNull`。四道降噪：
+  ① 只匹配**点号之后**的成员名 → 变量声明 / 函数名不误命中；
+  ② 本文件 import 了提供该扩展的包（`package:collection`）→ **放行**（那时合法）；
+  ③ 走 `mask_strings_comments` → 注释里写「别用 firstOrNull」不算命中；
+  ④ 每个成员每文件只报一次。
+- **最小复现 Repro**：临时 `lib/tmp_c27_probe.dart` 写 `final a = xs.firstOrNull();`
+  → 报 `[C27] lib/tmp_c27_probe.dart:4`。
+- **反向验证 Reverse-validation**（三反例 + 一真错，全过）：
+  ① 真错 → 命中（行号正确）；
+  ② 反例 `lib/tmp_c27_ok.dart` **import 了 `package:collection/collection.dart`** → **不报**；
+  ③ 反例：注释里 `// xs.lastOrNull();` → 不报；
+  ④ 反例：变量名 `firstOrNullMarker` → 不报。
+  还原（删两个临时文件）后 fitcoach **206 文件工程干净**。
+- **状态**：✅ 已补斧并反向验证通过（2026-10-08，v4.15，27 项）。
+
+---
+
+### M-027 · 2026-10-08 · fitcoach(v1.7 复验) · 时间窗口调用没传「注入时钟」→ **新增 C28**
+
+> ⚠️ **真漏报**（M-017 的**第二次出现**，见上面的复发记录）。
+
+- **症状 Symptom**：宿主 `flutter test` 报 `+471 -3`，
+  `TC-B-PLT 简化依从性 … Expected: 0.6667 / Actual: 0.3333`。
+- **根因 Root cause**：用例写死 `final now = DateTime(2026, 10, 1);` 却没传给
+  `plannedVsActualAdherence(..., weeks: 1)`；该函数 `until` 为可选参数，
+  不传 → `until ?? DateTime.now()` 锚**真实**时钟。真机日期 2026-10-08 时
+  窗口起点后移到 10-01，吃掉 09-30 那场 → 2/3 变 1/3。
+- **为什么这次能补斧（M-017 当时判不补斧）**：M-017 的论据是「全库硬编码绝对日期
+  159 处，按硬编码日期报 = 噪声」。本斧**不查硬编码日期**，只查窄得多的形态：
+  **被测函数已经开了 `now:` / `until:` 注入口，调用方却没用**。
+- **补的斧 Fix**：新增 **C28（HINT，仅 `test/`）**，五道降噪：
+  ① 只报 `test/`（生产代码本就该用真实时钟）；
+  ② 被调方不传时若是**常量兜底**（函数体里 `now ?? DateTime(2026, 10, 5)`）→ 放行；
+  ③ 调用点必须**显式传了跨度参数**（`weeks:` / `days:` / `windowDays:` …）
+     —— 没跨度就只有上界，日期后移不漏样本；
+  ④ 该文件必须真的写死了绝对日期；
+  ⑤ 每个函数每文件只报一次。
+- **首版误报（两处，都是收紧后才归零）**：
+  ① `export_reminder_test.dart:16` 的 `_evaluate(...)` —— 它的 helper **自己**
+     兜了 `now: now ?? DateTime(2026, 10, 5)`（常量兜底，确定性）→ 加降噪②后放行；
+  ② `plateau_test.dart:98` 的 `recentPeakRpe(sessions)` —— 只用**上界**
+     （`if (d.isAfter(anchor)) continue`），不传 `until` 也天天一样绿 → 加降噪③后放行。
+- **最小复现 Repro**：把 `plateau_test.dart:124` 的 `until: now` 去掉 → 报
+  `[C28] test/services/plateau_test.dart:124`（行号与真凶一致）；还原 → 不报。
+- **反向验证 Reverse-validation**：✅ 造错命中 + 还原后工程干净。
+- **顺带收获**：C28 在干净工程上仍命中 1 条 ——
+  `variation_advisor_test.dart:282` 的 `recentExerciseIds(_sessions(), days: 56, …)`
+  （该函数 `from = anchor.subtract(Duration(days: days))` **有下界**，确实会翻车）
+  → 已补 `until: _until`，全库转绿。这正是补斧的价值：**它挖出了一颗还没爆的雷**。
+- **状态**：✅ 已补斧并反向验证通过（2026-10-08，v4.15，27 项）。
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: flutter-sandbox-static-check
 description: >-
-  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.13 起 25 项 · v4.14 两条误报修复）。在无法运行
+  Flutter 工程静态体检（九板斧 / "Nine-Axe" static checker，v4.13 起 25 项 · v4.14 两条误报修复 · v4.15 起 27 项）。在无法运行
   flutter/dart 的环境（如 WorkBuddy 沙箱、未装 SDK 的 CI 节点）中，用纯文本分析替代
   flutter analyze，做 24 项检查（默认含 test/）：断 import、pubspec 依赖一致性、相对导入残留、
   枚举值存在性、assets 引用缺失、命名参数拼写、未使用 import（含 dart: 内建库）、括号平衡、
@@ -73,11 +73,11 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
 > **名称沿革 / Naming note**：skill 名「九板斧 / Nine-Axe」是历史叫法，v2 起 10 项、
 > v3 起 12 项、v4 起 13 项、v4.1 起 15 项、v4.2 起 16 项、v4.3 起 17 项、
 > v4.4 起 18 项、v4.5 起 19 项、v4.6 起 20 项、v4.7 起 21 项、v4.8 起 22 项、
-> v4.9 起 23 项、v4.10 起 24 项、**v4.11 把 C25 升级为传递闭包（项数不变）**、v4.12 为 C6 白名单补 `separatorBuilder`（M-022，仍 24）、**v4.13 新增 C26「工程类型形参的成员存在性」（M-023，25 项）**、**v4.14 = 两条误报修复（M-024 参数池容忍一层嵌套花括号默认值 / M-025 顶层函数容忍泛型参数名，仍 25 项）**。名字保留，避免打断既有文档与项目记忆里的引用。
+> v4.9 起 23 项、v4.10 起 24 项、**v4.11 把 C25 升级为传递闭包（项数不变）**、v4.12 为 C6 白名单补 `separatorBuilder`（M-022，仍 24）、**v4.13 新增 C26「工程类型形参的成员存在性」（M-023，25 项）**、**v4.14 = 两条误报修复（M-024 参数池容忍一层嵌套花括号默认值 / M-025 顶层函数容忍泛型参数名，仍 25 项）**、**v4.15 新增 C27「SDK 扩展成员不支持名单」（M-026）与 C28「时间窗口没传注入时钟」（M-027）—— 27 项**。名字保留，避免打断既有文档与项目记忆里的引用。
 > The skill name "Nine-Axe" is historical — 10 checks since v2, 12 since v3,
 > 13 since v4, 15 since v4.1, 16 since v4.2, 17 since v4.3, 18 since v4.4,
 > 19 since v4.5, 20 since v4.6, 21 since v4.7, 22 since v4.8, 23 since v4.9,
-> **24 since v4.10** (v4.11 = C25 transitive upgrade, v4.12 = C6 whitelist, count unchanged), **25 since v4.13** (C26, M-023); **v4.14 = two false-positive fixes** (M-024 param pool tolerates one nested-brace default value, M-025 top-level function regex tolerates generic parameter names, count unchanged). The name is kept so existing docs and project-memory
+> **24 since v4.10** (v4.11 = C25 transitive upgrade, v4.12 = C6 whitelist, count unchanged), **25 since v4.13** (C26, M-023); **v4.14 = two false-positive fixes** (M-024 param pool tolerates one nested-brace default value, M-025 top-level function regex tolerates generic parameter names, count unchanged); **27 since v4.15** (C27 unsupported-SDK-extension list, M-026; C28 time-window call without injected clock, M-027). The name is kept so existing docs and project-memory
 > references stay valid.
 
 1. **断 import（ERROR）** / **Broken import**: 解析 `package:fitcoach/...`，确认目标 `.dart` 文件存在。
@@ -371,6 +371,58 @@ python3 <skill_dir>/check.py --project C:/code/fitcoach
       `形参 p: UserProfile 上访问了 jointDiscomfort`；② 还原后 187 文件**工程干净**
       （零误报）；③ ⚠️ 复现必须还原**完整的修复前状态** —— 只改一处落点不算复现
       （`copyWith` 形参会把名字带回来，见上一条）。
+
+26. **SDK 扩展成员「本工程 Dart 版本不支持」名单（ERROR，C27）** /
+    **Unsupported SDK extension members**:
+    `.firstOrNull()` / `.lastOrNull()` / `.singleOrNull()` / `.firstWhereOrNull()` /
+    `.lastWhereOrNull()` / `.whereNotNull` —— 这些是 `package:collection` 的
+    **扩展方法**，本工程 Dart SDK **不自带** → `'firstOrNull' isn't a function`
+    编译硬错。
+    These are `package:collection` extensions, absent from this SDK →
+    `'firstOrNull' isn't a function`, a hard compile error.
+    - **v4.15 新增**（M-026，2026-10-08）：`models.dart` 的 `SessionScore.tryParse`
+      写了 `.firstOrNull()`。⛔ **危害被放大的原因**：它落在 `models.dart`
+      —— 全量测试的公共依赖，一个错让**所有**测试文件集体 `Failed to load`
+      （与 M-014 / M-016 同一放大机制：先找 analyze 的 error 条数，别被数量吓到）。
+      **Added in v4.15** (M-026): one occurrence in a common file broke every test.
+    - 与 C17 的分工（**形制相同、对象不同，别合并**）：C17 管「第三方 API
+      被挪走 / 删除」（符号曾经可用）；C27 管「扩展成员**压根不在这个 SDK 里**」。
+      C17 covers moved/removed APIs; C27 covers extensions that never existed here.
+    - **四道降噪缺一不可**：① 只匹配**点号之后**的成员名（变量 / 函数名不误命中）；
+      ② 本文件 import 了提供该扩展的包 → 放行（那时它合法）；
+      ③ 走 `mask_strings_comments` —— 注释里写「别用 firstOrNull」不算命中；
+      ④ 每个成员每文件只报一次。
+    - 修法 = 按名字取枚举 / 元素就写**显式 `for` 循环**，别依赖任何 SDK 扩展。
+    - 反向验证（v4.15）：真错命中 1；反例三类（import 了 `collection`、
+      注释里提到、变量名 `firstOrNullMarker`）**全部放行**；还原后工程干净。
+
+27. **时间窗口调用没传「注入时钟」（HINT，C28，仅 `test/`）** /
+    **Time-window calls that ignore the injected clock**:
+    用例写死 `final now = DateTime(2026, 10, 1);` 却**没把 `now` 传给被测函数**，
+    而该函数不传时取**真实** `DateTime.now()` 当锚点 → 真机日期一过写死的那天，
+    `weeks`/`days` 窗口起点后移，静默漏掉边界样本（**时间炸弹**：前一天全绿、
+    当天无改动却变红）。
+    A hardcoded `now` that is never passed: the callee falls back to the real
+    clock, so the window silently drops boundary samples once the host date passes.
+    - **v4.15 新增**（M-027，2026-10-08）：`plateau_test` 的
+      `plannedVsActualAdherence(plan, sessions, weeks: 1)` 没传 `until` →
+      2/3 变 1/3。**Added in v4.15** (M-027).
+    - 与 M-017 的关系（**别当成重复劳动**）：M-017 判「不补斧」的论据是
+      「全库硬编码绝对日期 159 处，按硬编码日期报 = 噪声」。本斧**不查硬编码日期**，
+      只查一个窄得多的形态：**被测函数已经开了 `now:` / `until:` 注入口，调用方却没用**
+      —— 这正是 M-017 那条人工纪律里唯一能被机器验证的那一半。
+    - **五道降噪（缺一即噪声，前两道是首版实测踩出来的误报）**：
+      ① **只报 `test/`**（生产代码本来就该用真实时钟）；
+      ② 被调方不传时若是**常量兜底**（函数体里 `now ?? DateTime(2026, 10, 5)`）
+      → 放行（不传也是确定性的，实测挡掉 `export_reminder_test` 的 `_evaluate`）；
+      ③ 调用点必须**显式传了跨度参数**（`weeks:` / `days:` / `windowDays:` …）——
+      没有跨度就只有**上界**（排除未来），日期后移不漏样本，不翻车
+      （实测挡掉 `recentPeakRpe(sessions)`）；
+      ④ 该文件必须真的写死了绝对日期；
+      ⑤ 每个函数每文件只报一次。
+    - 修法 = 把写死的 `now` 传进去（`until: now`），或改用 `DateTime.now()`
+      的相对值。**新增任何带「近 N 天」语义的能力时，被测函数必须支持时钟注入**
+      （否则它只能靠真机验收）。
 
 ## 设计借鉴（开源精华）/ Design Inspiration (from Open Source)
 
