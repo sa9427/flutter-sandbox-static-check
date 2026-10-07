@@ -541,6 +541,39 @@ loosening de-noising is the #1 cause of closed escapes silently returning.
   `RegExp(r'foo\s*[<(]')` so both generic and non-generic call sites are counted.
   📌 **When the sandbox cannot run flutter, re-implement `hitsOf` in Python and count
   line by line** — far cheaper than waiting for the host to run a full round.
+- ⚠️ **写「禁用词护栏」时，扫源码前必须先把整行 `//` 注释剔掉**：
+  在源码里写「禁止说『达标』」这类**禁令注释**是很自然的，但如果护栏对源文件做
+  **全量子串扫描**，它会把自己文档里的禁令当成违规命中 → 假红灯。
+  实测（fitcoach 2026-10-08）：`body_metric_service.dart` 注释「不说『变胖了』」被
+  TC-F41-07 判违规、`score_service.dart` 注释「不给排名 / 百分位」被 TC-B-SCO-06 判违规。
+  **纪律：护栏先 `codeOnly(path)`（剔除整行 `//` 注释 / 只留代码行）再扫 needle**，
+  真实 `Text('...')` 仍在代码行里、照样被抓到；顺带记住**否定式也含禁用词**
+  （「不提供达标标准」里照样有「达标」）→ 改写成不含该词的表述。
+  When writing a "forbidden-word guard", **strip whole-line `//` comments before scanning**:
+  it is natural to document the ban in a comment ("never say 达标"), but a full-substring
+  scan then flags its own ban as a violation. Real case (fitcoach 2026-10-08): the comment
+  "不说『变胖了』" was flagged by TC-F41-07 and "不给排名/百分位" by TC-B-SCO-06.
+  **Rule: mask whole-line `//` comments first (`codeOnly(path)`), then scan** — real
+  `Text('...')` literals live on code lines and are still caught. Also note a **negation
+  still contains the word** ("不提供达标标准" contains 达标) → rephrase without the word.
+- ⚠️ **工程特有规则不补进本工具，由项目自己的护栏测试守**：
+  本仓是**通用**工具（换任何 Flutter 工程都成立才配叫斧头）。像 FitCoach 的
+  「浮层必须走 `showAppSheet`」「边距必须走 `LayoutMetrics`」「时间窗口必须传 `until`」
+  这类**只在某一个工程成立**的规则，塞进 `check.py` 会污染通用判据面，
+  且**换了设备照样读不到「这个项目有哪些特有约定」**。
+  **纪律：一条规则只在某工程成立 → 写进该工程的 `test/` 文件级护栏测试**（随项目仓走、
+  clone 即得、跨设备不丢）；**换任何 Flutter 工程都成立 → 才考虑补斧 + 反向验证 + 登 `MISSES.md`**。
+  对照：C27（SDK 扩展禁用名单）/ C28（有 `until:` 注入口却不传）是后者；
+  `showAppSheet` / `LayoutMetrics` 两条是前者（fitcoach 由 `web_input_test` /
+  `adaptive_layout_test` 守着）。
+  **Project-specific rules do not belong in this tool** — they belong in the project's own
+  file-level guard tests. This repo is generic: only rules that hold for *any* Flutter
+  project qualify as an axe. Rules like "use `showAppSheet`" / "use `LayoutMetrics`" are
+  FitCoach-only; adding them here pollutes the generic rule set, and a new device still
+  would not learn that project's conventions. **Rule: project-only → guard test in that
+  repo's `test/` (travels with the repo, survives device switches); universal → axe +
+  reverse validation + `MISSES.md`.** Cf. C27 / C28 (universal) vs. `web_input_test` /
+  `adaptive_layout_test` (FitCoach guards).
 - 每次改完 Dart 代码跑一遍，确认 `RESULT: 工程干净 ✅` 后再提交。
   Run it after every Dart edit; only commit once `RESULT: 工程干净 ✅` is confirmed.
 - **宿主复验报了问题就走反哺流程**（见上一节 `MISSES.md`）：先判断是不是漏报，
