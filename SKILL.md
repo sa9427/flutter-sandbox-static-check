@@ -500,6 +500,17 @@ loosening de-noising is the #1 cause of closed escapes silently returning.
   has no context to infer from → Dart types it `List<int>` → hard error when passed to a
   `List<double>` parameter. **Rule: write `<double>[...]` or use `.0` literals**, especially
   in `const` declarations (non-const arguments get context inference).
+  **第二类触发（2026-10-08，M-028）：可空 getter 透传给非空形参。**
+  `ImportedCardio.durationMinutes` 是 `int?`（底层 `seriesDurationSeconds` 缺时间戳时返回
+  `null`），直接传给 `CardioSegmentDraft(durationMinutes: …)` 的非空 `int` → 编译硬错，
+  **整个 `widget_test.dart` Failed to load（一处类型错 = 全库测试挂）**。
+  **纪律：把一个 `X?` 传进非空形参前，先看该工程这个字段的「空值口径」是什么** ——
+  通常是「保留既有默认值」（`cardio_log_page` 原本就写
+  `if (d.durationMinutes != null) _draft.durationMinutes = d.durationMinutes!;`），
+  即 `x ?? <该字段的既有默认>`；**不要**为了消编译错去改形参的 nullability（影响面
+  波及 `isValid` / `toJson` / `fromJson` / 全部消费点）。
+  ⚠️ **「九板斧干净」≠ 编译通过**：本工具没有类型信息，**编译期错误必然漏**，
+  且一处类型错会连带整个测试文件加载失败。提交前**仍然必须跑一次 `flutter analyze`**。
 - **本工具查不到的第四类 —— 测试里的「时间炸弹」（硬编码绝对日期 × 真实时钟）**：
   test 里把日期写成 `DateTime(2026, 10, 5, 10)` 这种**离今天很近**的绝对值时，
   写当天全绿；但只要被测代码内部读了 `DateTime.now()`（如草稿 TTL 24h 的过期判定、

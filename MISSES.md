@@ -834,6 +834,38 @@
 
 ---
 
+### M-028 · 2026-10-08 · fitcoach(v1.7 序 14 F44 混合有氧导入) · `int?` 透传给非空 `int` 形参 → ⬜ **不补斧（能力边界）**
+
+> ⚠️ **真漏报**，但属**工具能力边界**：本工具是 Python 文本扫描，**没有 Dart 类型信息**，
+> 原则上抓不到任何 null-safety 类型不匹配。登记的目的是**避免以后重复困惑 / 重复论证**，
+> 不是要补一把斧。
+
+- **症状 Symptom**：宿主 `flutter test` 报
+  `lib/features/training/training_record_page.dart:625:26: Error: The argument type 'int?' can't be assigned to the parameter type 'int'. durationMinutes: d.durationMinutes,`
+  → 整个 `widget_test.dart` 加载失败（`Compilation failed`），**一错全库测试挂**。
+- **根因 Root cause**：`ImportedCardio.durationMinutes` 是**可空 getter**
+  （`training_import.dart:70`，内部 `seriesDurationSeconds(series)` 在有效记录点 < 2
+  或没有时间戳时返回 `null`）；而 `CardioSegmentDraft.durationMinutes` 是**非空 `int`**
+  （`cardio_draft.dart:26`，默认 `0`）。接线时直接透传，没处理可空分支。
+  **修法**：`mins ?? 0`（`0` 是本 draft 既有的「未填」口径：默认 0、`fromJson` 缺键 → 0、
+  `isValid => durationMinutes > 0` 拦保存），并在提示文案里区分
+  「文件没有时间戳，时长需你补填」。与既有写法一致 —— `cardio_log_page.dart:140-146`
+  本来就是 `if (d.durationMinutes != null) _draft.durationMinutes = d.durationMinutes!;`。
+- **旧九板斧为何漏**：C6 只比对**命名参数名是否在池子里**、C8 只查**括号配对**，
+  两者都**不涉及类型**；工程里也没有 `dart analyzer`。可空性推导（`?` 声明、
+  getter 返回类型、实参到形参的赋值兼容）**必须靠类型系统**。
+- **为什么不补斧**：
+  ① 真要做就得内嵌一个 Dart 类型检查器，成本与「Python 静态体检」的定位冲突；
+  ② 宿主本来就有 `flutter analyze`，这类错误**第一时间就会被拦在编译期**，
+     补一把「猜可空性」的正则斧只会产出大量误报。
+- **✅ 可执行的部分（写入使用纪律）**：既然编译期错误本工具必然漏，
+  就把它**显式写进 SKILL.md 的「本工具查不到的第 N 类」** ——
+  让使用者在「九板斧干净」之后**仍然必须跑一次 `flutter analyze`**，
+  而不是把「九板斧干净」当成编译通过的等价物。
+- **状态**：⬜ 不补斧（能力边界），已登记 + 使用纪律同步（2026-10-08）。
+
+---
+
 ## 新条目模板 / Template for New Entries
 
 ```markdown
